@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-# api/app.py - Enhanced Flask API with WebSocket support
+# api/app.py - Flask API with WebSocket + MQTT Integration
 
 from flask import Flask, jsonify, request, send_file
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
+import paho.mqtt.client as mqtt
 import psutil
 import threading
 import time
 import os
 import sys
+import json
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,7 +21,9 @@ from utils.pairing import create_pairing, validate_pairing
 from oled_manager.oled_service import show_qr, show_status, show_boot
 from api.modbus_routes import modbus_api
 
+# ============================================
 # Initialize Flask app
+# ============================================
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'edgeforce-secret-key-change-in-production'
 
@@ -30,7 +34,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(
     app, 
     cors_allowed_origins="*",
-    async_mode='threading',  # Changed from eventlet to threading
+    async_mode='threading',
     logger=True,
     engineio_logger=True,
     ping_timeout=60,
@@ -51,17 +55,136 @@ print("CORS enabled for all origins")
 print("=" * 50)
 
 # ============================================
+# MQTT Integration
+# ============================================
+
+mqtt_client = None
+
+def on_mqtt_connect(client, userdata, flags, rc):
+    """Callback when MQTT client connects"""
+    if rc == 0:
+        print("✅ MQTT: Connected to broker")
+        # Subscribe to all EFIO topics
+        client.subscribe("edgeforce/#")
+        print("📡 MQTT: Subscribed to edgeforce/#")
+        
+        # Publish initial state
+        for i, val in enumerate(state["di"]):
+            client.publish(f"edgeforce/io/di/{i+1}", val, retain=True)
+        for i, val in enumerate(state["do"]):
+            client.publish(f"edgeforce/io/do/{i+1}", val, retain=True)
+    else:
+        print(f"❌ MQTT: Connection failed with code {rc}")
+
+def on_mqtt_disconnect(client, userdata, rc):
+    """Callback when MQTT client disconnects"""
+    if rc != 0:
+        print(f"⚠️ MQTT: Unexpected disconnection (code {rc})")
+
+def on_mqtt_message(client, userdata, msg):
+    """Forward MQTT messages to WebSocket clients"""
+    try:
+        topic = msg.topic
+        payload = msg.payload.decode()
+        
+        print(f"📥 MQTT: {topic} = {payload}")
+        
+        # Parse topic: edgeforce/io/di/1 → channel 0
+        parts = topic.split('/')
+        
+        if len(parts) >= 3 and parts[0] == 'edgeforce':
+            category = parts[1]  # 'io' or 'system'
+            
+            # Handle I/O updates
+            if category == 'io' and len(parts) == 4:
+                io_type = parts[2]  # 'di' or 'do'
+                channel = int(parts[3]) - 1  # Convert to 0-indexed
+                
+                try:
+                    value = int(payload)
+                    
+                    if io_type == 'di' and 0 <= channel < 4:
+                        # Update digital input state
+                        state['di'][channel] = value
+                        # Broadcast to WebSocket clients
+                        socketio.emit('io_update', {
+                            'di': state['di'], 
+                            'do': state['do']
+                        }, namespace='/')
+                        
+                    elif io_type == 'do' and 0 <= channel < 4:
+                        # Update digital output state (read-back)
+                        state['do'][channel] = value
+                        socketio.emit('io_update', {
+                            'di': state['di'], 
+                            'do': state['do']
+                        }, namespace='/')
+                        
+                except ValueError:
+                    print(f"⚠️ MQTT: Invalid value '{payload}' for {topic}")
+            
+            # Handle system metrics updates
+            elif category == 'system':
+                metric_name = parts[2] if len(parts) > 2 else None
+                if metric_name:
+                    # Store system metrics in state (optional)
+                    if 'mqtt_system' not in state:
+                        state['mqtt_system'] = {}
+                    state['mqtt_system'][metric_name] = payload
+                    
+    except Exception as e:
+        print(f"❌ MQTT message handler error: {e}")
+        import traceback
+        traceback.print_exc()
+
+def init_mqtt():
+    """Initialize MQTT client"""
+    global mqtt_client
+    
+    try:
+        mqtt_client = mqtt.Client(client_id="efio_flask_api")
+        mqtt_client.on_connect = on_mqtt_connect
+        mqtt_client.on_disconnect = on_mqtt_disconnect
+        mqtt_client.on_message = on_mqtt_message
+        
+        # Connect to local Mosquitto broker
+        mqtt_client.connect("localhost", 1883, 60)
+        mqtt_client.loop_start()
+        
+        print("🔌 MQTT: Client initialized")
+        return True
+        
+    except Exception as e:
+        print(f"❌ MQTT: Initialization failed: {e}")
+        print("⚠️ MQTT: System will continue without MQTT (fallback mode)")
+        return False
+
+# Helper function to publish to MQTT
+def mqtt_publish(topic, payload, retain=False):
+    """Publish message to MQTT broker"""
+    if mqtt_client and mqtt_client.is_connected():
+        try:
+            mqtt_client.publish(topic, payload, retain=retain)
+            return True
+        except Exception as e:
+            print(f"❌ MQTT publish error: {e}")
+            return False
+    return False
+
+# ============================================
 # REST API Endpoints
 # ============================================
 
 @app.get("/api/status")
 def status():
     """Health check endpoint"""
+    mqtt_status = "connected" if (mqtt_client and mqtt_client.is_connected()) else "disconnected"
     return jsonify({
         "status": "ok",
         "message": "EFIO API online",
         "version": "1.0.0",
-        "websocket": "enabled"
+        "websocket": "enabled",
+        "mqtt": mqtt_status
     })
 
 @app.get("/api/io")
@@ -82,14 +205,23 @@ def set_do(ch):
     data = request.get_json()
     new_val = 1 if data.get("state") else 0
     
+    # Update local state
     state["do"][ch] = new_val
+    
+    # Write to hardware
     daemon.manager.write_output(ch, new_val)
     
-    # Broadcast change to all connected WebSocket clients
+    # Publish to MQTT (command topic)
+    mqtt_publish(f"edgeforce/io/do/{ch+1}/set", new_val, retain=False)
+    
+    # Publish actual state (feedback topic)
+    mqtt_publish(f"edgeforce/io/do/{ch+1}", new_val, retain=True)
+    
+    # Broadcast change to WebSocket clients
     socketio.emit('io_update', {
         'di': state["di"],
         'do': state["do"]
-    }, broadcast=True)
+    }, namespace='/')
     
     return jsonify({
         "channel": ch,
@@ -112,7 +244,7 @@ def get_system_metrics():
             with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
                 temp = int(f.read().strip()) / 1000.0
         except Exception as e:
-            print(f"Cannot read temperature: {e}")
+            pass
         
         # Disk usage
         disk = psutil.disk_usage('/')
@@ -120,7 +252,7 @@ def get_system_metrics():
         # Uptime
         uptime = time.time() - psutil.boot_time()
         
-        return jsonify({
+        metrics = {
             "cpu": {
                 "percent": round(cpu_percent, 1),
                 "cores": psutil.cpu_count()
@@ -140,7 +272,16 @@ def get_system_metrics():
                 "total_gb": round(disk.total / (1024**3), 2)
             },
             "uptime_seconds": int(uptime)
-        })
+        }
+        
+        # Publish to MQTT
+        mqtt_publish("edgeforce/system/cpu", cpu_percent)
+        mqtt_publish("edgeforce/system/ram", memory.percent)
+        mqtt_publish("edgeforce/system/temp", temp)
+        mqtt_publish("edgeforce/system/uptime", uptime)
+        
+        return jsonify(metrics)
+        
     except Exception as e:
         print(f"Error getting system metrics: {e}")
         return jsonify({"error": str(e)}), 500
@@ -196,6 +337,40 @@ def oled_qr():
         return jsonify({"error": "url required"}), 400
     show_qr(url)
     return jsonify({"status": "ok"})
+
+# ============================================
+# MQTT Testing Endpoints (for debugging)
+# ============================================
+
+@app.get("/api/mqtt/status")
+def mqtt_status():
+    """Get MQTT connection status"""
+    if mqtt_client:
+        return jsonify({
+            "connected": mqtt_client.is_connected(),
+            "broker": "localhost:1883"
+        })
+    return jsonify({
+        "connected": False,
+        "error": "MQTT client not initialized"
+    })
+
+@app.post("/api/mqtt/publish")
+def mqtt_publish_test():
+    """Test MQTT publish (for debugging)"""
+    data = request.get_json()
+    topic = data.get("topic")
+    payload = data.get("payload")
+    
+    if not topic or payload is None:
+        return jsonify({"error": "topic and payload required"}), 400
+    
+    success = mqtt_publish(topic, payload)
+    return jsonify({
+        "success": success,
+        "topic": topic,
+        "payload": payload
+    })
 
 # ============================================
 # WebSocket Events
@@ -258,14 +433,21 @@ def handle_set_do(data):
         emit('error', {'message': 'Invalid channel'})
         return
     
+    # Update state
     state["do"][ch] = value
+    
+    # Write to hardware
     daemon.manager.write_output(ch, value)
+    
+    # Publish to MQTT
+    mqtt_publish(f"edgeforce/io/do/{ch+1}/set", value)
+    mqtt_publish(f"edgeforce/io/do/{ch+1}", value, retain=True)
     
     # Broadcast to all clients
     socketio.emit('io_update', {
         'di': state["di"],
         'do': state["do"]
-    }, broadcast=True)
+    }, namespace='/')
     
     print(f'✅ DO{ch} set to {value}')
 
@@ -284,7 +466,7 @@ def background_broadcast():
             with app.app_context():
                 broadcast_count += 1
                 
-                # Always broadcast I/O state (even if unchanged for debugging)
+                # Always broadcast I/O state
                 current_io = {"di": state["di"][:], "do": state["do"][:]}
                 socketio.emit('io_update', current_io, namespace='/')
                 
@@ -292,7 +474,7 @@ def background_broadcast():
                     print(f"📡 I/O state changed: {current_io}")
                     last_io_state = current_io
                 
-                # Broadcast system metrics every time
+                # Broadcast system metrics
                 try:
                     cpu_percent = psutil.cpu_percent(interval=0.1)
                     memory = psutil.virtual_memory()
@@ -332,7 +514,12 @@ def background_broadcast():
                     
                     socketio.emit('system_update', metrics, namespace='/')
                     
-                    # Log every 10 broadcasts (every 20 seconds) to avoid spam
+                    # Publish to MQTT every broadcast
+                    mqtt_publish("edgeforce/system/cpu", cpu_percent)
+                    mqtt_publish("edgeforce/system/ram", memory.percent)
+                    mqtt_publish("edgeforce/system/temp", temp)
+                    
+                    # Log every 10 broadcasts (every 20 seconds)
                     if broadcast_count % 10 == 0:
                         print(f"📡 Broadcast #{broadcast_count}: CPU={cpu_percent:.1f}%, RAM={memory.percent:.1f}%, Temp={temp:.1f}°C")
                 
@@ -347,14 +534,11 @@ def background_broadcast():
             traceback.print_exc()
             time.sleep(2)
 
-# Start background broadcast thread AFTER app is created
 def start_background_thread():
     """Start background thread after socketio is initialized"""
     background_thread = threading.Thread(target=background_broadcast, daemon=True)
     background_thread.start()
     print("✅ Background broadcast thread started")
-
-# We'll call this after socketio.run() is ready
 
 # ============================================
 # Main
@@ -362,14 +546,21 @@ def start_background_thread():
 
 if __name__ == '__main__':
     print("\n" + "=" * 50)
-    print("🚀 EFIO API Server with WebSocket")
+    print("🚀 EFIO API Server with WebSocket + MQTT")
     print("=" * 50)
     print(f"📡 HTTP API: http://0.0.0.0:5000")
     print(f"🔌 WebSocket: ws://0.0.0.0:5000")
     print(f"🌐 CORS: Enabled for all origins")
     print("=" * 50 + "\n")
     
-    # Start background thread before running socketio
+    # Initialize MQTT
+    mqtt_initialized = init_mqtt()
+    if mqtt_initialized:
+        print("✅ MQTT broker connected")
+    else:
+        print("⚠️ Running without MQTT (fallback mode)")
+    
+    # Start background thread
     start_background_thread()
     
     # Run with SocketIO
@@ -378,6 +569,6 @@ if __name__ == '__main__':
         host='0.0.0.0', 
         port=5000, 
         debug=True,
-        use_reloader=False,  # Disable reloader to prevent duplicate threads
+        use_reloader=False,
         allow_unsafe_werkzeug=True
     )
