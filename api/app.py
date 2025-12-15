@@ -4,6 +4,7 @@
 from flask import Flask, jsonify, request, send_file
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
+from flask_jwt_extended import JWTManager
 import paho.mqtt.client as mqtt
 import psutil
 import threading
@@ -20,15 +21,22 @@ from efio_daemon.state import state
 from utils.pairing import create_pairing, validate_pairing
 from oled_manager.oled_service import show_qr, show_status, show_boot
 from api.modbus_routes import modbus_api
+from api.auth_routes import auth_api
 
 # ============================================
 # Initialize Flask app
 # ============================================
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'edgeforce-secret-key-change-in-production'
+app.config['JWT_SECRET_KEY'] = 'jwt-secret-key-change-in-production'  # Change this!
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 28800  # 8 hours
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = 2592000  # 30 days
 
 # Enable CORS for all routes
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Initialize JWT
+jwt = JWTManager(app)
 
 # Initialize SocketIO with CORS
 socketio = SocketIO(
@@ -41,12 +49,14 @@ socketio = SocketIO(
     ping_interval=25
 )
 
-# Initialize daemon
-daemon = EFIODeviceDaemon()
+# Initialize daemon with debug mode (set to True to see all MQTT publishes)
+DEBUG_MQTT = False  # Set to True for verbose MQTT logging
+daemon = EFIODeviceDaemon(debug_mqtt=DEBUG_MQTT)
 daemon.start()
 
 # Register blueprints
 app.register_blueprint(modbus_api)
+app.register_blueprint(auth_api)
 
 print("=" * 50)
 print("EFIO API Server Starting...")
