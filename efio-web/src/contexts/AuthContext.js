@@ -1,0 +1,158 @@
+// src/contexts/AuthContext.js
+// Authentication context provider
+
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import {jwtDecode} from 'jwt-decode';
+
+const AuthContext = createContext(null);
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within AuthProvider');
+  }
+  return context;
+};
+
+export const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Check for stored token on mount
+  useEffect(() => {
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      try {
+        const decoded = jwtDecode(token);
+        // Check if token is expired
+        if (decoded.exp * 1000 > Date.now()) {
+          setUser({
+            username: decoded.sub,
+            role: decoded.role,
+            email: decoded.email,
+            full_name: decoded.full_name
+          });
+        } else {
+          // Token expired, try to refresh
+          refreshToken();
+        }
+      } catch (error) {
+        console.error('Invalid token:', error);
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+      }
+    }
+    setLoading(false);
+  }, []);
+
+  const login = async (username, password) => {
+    try {
+      const response = await fetch('http://192.168.5.103:5000/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ username, password }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Login failed');
+      }
+
+      // Store tokens
+      localStorage.setItem('access_token', data.access_token);
+      localStorage.setItem('refresh_token', data.refresh_token);
+
+      // Decode and set user
+      const decoded = jwtDecode(data.access_token);
+      setUser({
+        username: decoded.sub,
+        role: decoded.role,
+        email: decoded.email,
+        full_name: decoded.full_name
+      });
+
+      return { success: true };
+    } catch (error) {
+      console.error('Login error:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    setUser(null);
+  };
+
+  const refreshToken = async () => {
+    const refresh = localStorage.getItem('refresh_token');
+    if (!refresh) {
+      logout();
+      return false;
+    }
+
+    try {
+      const response = await fetch('http://192.168.5.103:5000/api/auth/refresh', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${refresh}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error('Refresh failed');
+      }
+
+      localStorage.setItem('access_token', data.access_token);
+
+      // Decode and update user
+      const decoded = jwtDecode(data.access_token);
+      setUser({
+        username: decoded.sub,
+        role: decoded.role,
+        email: decoded.email,
+        full_name: decoded.full_name
+      });
+
+      return true;
+    } catch (error) {
+      console.error('Token refresh error:', error);
+      logout();
+      return false;
+    }
+  };
+
+  const getAuthHeader = () => {
+    const token = localStorage.getItem('access_token');
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+  };
+
+  const hasRole = (requiredRole) => {
+    if (!user) return false;
+    if (requiredRole === 'admin') return user.role === 'admin';
+    if (requiredRole === 'operator') return ['admin', 'operator'].includes(user.role);
+    return true; // viewer or any authenticated user
+  };
+
+  const value = {
+    user,
+    loading,
+    login,
+    logout,
+    refreshToken,
+    getAuthHeader,
+    hasRole,
+    isAuthenticated: !!user
+  };
+
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
