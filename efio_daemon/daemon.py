@@ -8,12 +8,14 @@ from efio_daemon.io_manager import IOManager
 from efio_daemon.state import state
 
 class EFIODeviceDaemon:
-    def __init__(self):
+    def __init__(self, debug_mqtt=False):
         self.manager = IOManager()
         self.running = True
         self.last_di = [0, 0, 0, 0]
         self.mqtt_client = None
         self.mqtt_connected = False
+        self.debug_mqtt = debug_mqtt  # If True, publish every cycle
+        self.loop_count = 0
         
         # Initialize MQTT client
         self._init_mqtt()
@@ -74,15 +76,24 @@ class EFIODeviceDaemon:
     def loop(self):
         """Main daemon loop - poll inputs and publish changes"""
         while self.running:
+            self.loop_count += 1
+            
             # Read DI from hardware
             di_values = self.manager.read_all_inputs()
             
             # Check for changes and publish to MQTT
             for i, val in enumerate(di_values):
+                # Publish if changed OR if in debug mode every 50 loops (5 seconds)
+                should_publish = (val != self.last_di[i]) or \
+                                (self.debug_mqtt and self.loop_count % 50 == 0)
+                
                 if val != self.last_di[i]:
                     print(f"🔄 Daemon: DI{i+1} changed: {self.last_di[i]} → {val}")
                     self._publish_di(i, val)
                     self.last_di[i] = val
+                elif should_publish:
+                    # Debug: Publish even if unchanged
+                    self._publish_di(i, val)
             
             # Update global state
             state["di"] = di_values
