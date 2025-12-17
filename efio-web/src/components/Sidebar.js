@@ -13,14 +13,20 @@ import {
   Toolbar,
   Typography,
   Divider,
-  Box
+  Box,
+  Button
 } from '@mui/material';
 import {
   Dashboard as DashboardIcon,
   PowerSettingsNew,
   Assessment,
-  Settings
+  Settings,
+  BugReport,
+  NetworkCheck,
+  Tune,
+  Logout
 } from '@mui/icons-material';
+import { useAuth } from '../contexts/AuthContext';
 
 const drawerWidth = 240;
 
@@ -28,7 +34,10 @@ const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
   { text: 'I/O Status', icon: <PowerSettingsNew />, path: '/io' },
   { text: 'System Metrics', icon: <Assessment />, path: '/metrics' },
-  { text: 'Diagnostic', icon: <Settings />, path: '/diagnostic' },
+  { text: 'Diagnostic', icon: <BugReport />, path: '/diagnostic' },
+  { text: 'divider' },
+  { text: 'Network Config', icon: <NetworkCheck />, path: '/config/network', adminOnly: true },
+  { text: 'I/O Config', icon: <Tune />, path: '/config/io' },
   { text: 'Settings', icon: <Settings />, path: '/settings' }
 ];
 

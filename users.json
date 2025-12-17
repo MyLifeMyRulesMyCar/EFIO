@@ -1,0 +1,16 @@
+{
+  "admin": {
+    "username": "admin",
+    "password_hash": "$2b$12$9j2X0ylYV2PSdv5zsuakiOlapCSxHS5vZO6XLB/1BOFUwm0LI7o5e",
+    "role": "admin",
+    "email": "admin@edgeforce.local",
+    "full_name": "Administrator"
+  },
+  "operator": {
+    "username": "operator",
+    "password_hash": "$2b$12$RrDcyVClLPNeRO4tq4KMpuYZLJRgonehkAuwI4fw99FOD48zKrudu",
+    "role": "operator",
+    "email": "operator@edgeforce.local",
+    "full_name": "Operator User"
+  }
+}

@@ -22,6 +22,7 @@ from utils.pairing import create_pairing, validate_pairing
 from oled_manager.oled_service import show_qr, show_status, show_boot
 from api.modbus_routes import modbus_api
 from api.auth_routes import auth_api
+from api.config_routes import config_api
 
 # ============================================
 # Initialize Flask app
@@ -57,6 +58,7 @@ daemon.start()
 # Register blueprints
 app.register_blueprint(modbus_api)
 app.register_blueprint(auth_api)
+app.register_blueprint(config_api)
 
 print("=" * 50)
 print("EFIO API Server Starting...")
