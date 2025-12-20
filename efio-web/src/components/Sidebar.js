@@ -27,15 +27,17 @@ import {
   Logout
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
-
+import { SettingsInputComponent } from '@mui/icons-material'; 
 const drawerWidth = 240;
 
+// Add to menuItems array
 const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
   { text: 'I/O Status', icon: <PowerSettingsNew />, path: '/io' },
   { text: 'System Metrics', icon: <Assessment />, path: '/metrics' },
   { text: 'Diagnostic', icon: <BugReport />, path: '/diagnostic' },
   { text: 'divider' },
+  { text: 'Modbus Manager', icon: <SettingsInputComponent />, path: '/modbus' }, // NEW
   { text: 'Network Config', icon: <NetworkCheck />, path: '/config/network', adminOnly: true },
   { text: 'I/O Config', icon: <Tune />, path: '/config/io' },
   { text: 'Settings', icon: <Settings />, path: '/settings' }

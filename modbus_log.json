@@ -1,0 +1,56 @@
+[
+  {
+    "timestamp": "2025-12-19T13:48:45.910313",
+    "type": "device_created",
+    "device_id": "dev_1766152125_1",
+    "message": "Device 'test' created",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-19T13:48:50.352926",
+    "type": "connected",
+    "device_id": "dev_1766152125_1",
+    "message": "Connected to 'test'",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-19T13:49:02.397567",
+    "type": "read",
+    "device_id": "dev_1766152125_1",
+    "message": "Read FC3 from 0, count=1",
+    "data": [
+      {
+        "register": 0,
+        "value": 12
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-12-19T13:51:56.558027",
+    "type": "disconnected",
+    "device_id": "dev_1766152125_1",
+    "message": "Disconnected from 'test'",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-19T13:51:59.861387",
+    "type": "connected",
+    "device_id": "dev_1766152125_1",
+    "message": "Connected to 'test'",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-19T13:52:05.205037",
+    "type": "read_error",
+    "device_id": "dev_1766152125_1",
+    "message": "Read failed: No communication with the instrument (no answer)",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-19T13:52:06.349274",
+    "type": "read_error",
+    "device_id": "dev_1766152125_1",
+    "message": "Read failed: No communication with the instrument (no answer)",
+    "data": null
+  }
+]

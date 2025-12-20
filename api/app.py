@@ -23,7 +23,7 @@ from oled_manager.oled_service import show_qr, show_status, show_boot
 from api.modbus_routes import modbus_api
 from api.auth_routes import auth_api
 from api.config_routes import config_api
-
+from api.modbus_device_routes import modbus_device_api
 # ============================================
 # Initialize Flask app
 # ============================================
@@ -35,6 +35,8 @@ app.config['JWT_REFRESH_TOKEN_EXPIRES'] = 2592000  # 30 days
 
 # Enable CORS for all routes
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+
 
 # Initialize JWT
 jwt = JWTManager(app)
@@ -59,6 +61,7 @@ daemon.start()
 app.register_blueprint(modbus_api)
 app.register_blueprint(auth_api)
 app.register_blueprint(config_api)
+app.register_blueprint(modbus_device_api)
 
 print("=" * 50)
 print("EFIO API Server Starting...")

@@ -18,6 +18,7 @@ import Diagnostic from './pages/Diagnostic';
 import NetworkSettings from './pages/NetworkSettings';
 import IOConfiguration from './pages/IOConfiguration';
 import useEFIOWebSocket from './hooks/useEFIOWebSocket';
+import ModbusManager from './pages/ModbusManager';
 
 const drawerWidth = 240;
 
@@ -105,6 +106,7 @@ function MainLayout() {
           <Route path="/io" element={<IOStatus />} />
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/diagnostic" element={<Diagnostic />} />
+          <Route path="/modbus" element={<ModbusManager />} />
           
           {/* Configuration routes */}
           <Route path="/config/network" element={
