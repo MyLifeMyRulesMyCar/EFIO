@@ -479,6 +479,12 @@ export default function ModbusManager() {
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
             <Grid item xs={12}>
+              <Alert severity="info">
+                Configure scan parameters to match your Modbus network settings
+              </Alert>
+            </Grid>
+            
+            <Grid item xs={12}>
               <FormControl fullWidth>
                 <InputLabel>Port</InputLabel>
                 <Select value={scanForm.port} label="Port"
@@ -489,6 +495,7 @@ export default function ModbusManager() {
                 </Select>
               </FormControl>
             </Grid>
+            
             <Grid item xs={6}>
               <TextField fullWidth type="number" label="Start Slave ID" value={scanForm.start_id}
                 onChange={(e) => setScanForm({ ...scanForm, start_id: parseInt(e.target.value) })}
@@ -499,30 +506,128 @@ export default function ModbusManager() {
                 onChange={(e) => setScanForm({ ...scanForm, end_id: parseInt(e.target.value) })}
                 inputProps={{ min: 1, max: 247 }} />
             </Grid>
+            
+            <Grid item xs={12}>
+              <Divider><Chip label="Serial Parameters" size="small" /></Divider>
+            </Grid>
+            
+            <Grid item xs={6}>
+              <FormControl fullWidth>
+                <InputLabel>Baudrate</InputLabel>
+                <Select value={scanForm.baudrate} label="Baudrate"
+                  onChange={(e) => setScanForm({ ...scanForm, baudrate: parseInt(e.target.value) })}>
+                  <MenuItem value={4800}>4800 bps</MenuItem>
+                  <MenuItem value={9600}>9600 bps (Most Common)</MenuItem>
+                  <MenuItem value={19200}>19200 bps</MenuItem>
+                  <MenuItem value={38400}>38400 bps</MenuItem>
+                  <MenuItem value={57600}>57600 bps</MenuItem>
+                  <MenuItem value={115200}>115200 bps</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            
+            <Grid item xs={6}>
+              <FormControl fullWidth>
+                <InputLabel>Parity</InputLabel>
+                <Select value={scanForm.parity} label="Parity"
+                  onChange={(e) => setScanForm({ ...scanForm, parity: e.target.value })}>
+                  <MenuItem value="N">None (Most Common)</MenuItem>
+                  <MenuItem value="E">Even</MenuItem>
+                  <MenuItem value="O">Odd</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            
+            <Grid item xs={6}>
+              <FormControl fullWidth>
+                <InputLabel>Stop Bits</InputLabel>
+                <Select value={scanForm.stopbits} label="Stop Bits"
+                  onChange={(e) => setScanForm({ ...scanForm, stopbits: parseInt(e.target.value) })}>
+                  <MenuItem value={1}>1 (Standard)</MenuItem>
+                  <MenuItem value={2}>2</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            
+            <Grid item xs={6}>
+              <FormControl fullWidth>
+                <InputLabel>Timeout</InputLabel>
+                <Select value={scanForm.timeout} label="Timeout"
+                  onChange={(e) => setScanForm({ ...scanForm, timeout: parseFloat(e.target.value) })}>
+                  <MenuItem value={0.2}>0.2s (Fast)</MenuItem>
+                  <MenuItem value={0.5}>0.5s (Normal)</MenuItem>
+                  <MenuItem value={1.0}>1.0s (Slow/Reliable)</MenuItem>
+                  <MenuItem value={2.0}>2.0s (Very Slow)</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            
+            <Grid item xs={12}>
+              <Alert severity="warning" sx={{ mt: 1 }}>
+                <Typography variant="caption" display="block" gutterBottom>
+                  <strong>Tip:</strong> If unsure, try these common configurations:
+                </Typography>
+                <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.75rem' }}>
+                  <li><strong>Standard Industrial:</strong> 9600 bps, None, 1 stop</li>
+                  <li><strong>Energy Meters:</strong> 9600 bps, Even, 1 stop</li>
+                  <li><strong>High Speed:</strong> 115200 bps, None, 1 stop</li>
+                </ul>
+              </Alert>
+            </Grid>
+            
             {scanning && (
               <Grid item xs={12}>
-                <Box display="flex" alignItems="center" gap={2}>
+                <Box display="flex" alignItems="center" gap={2} sx={{ p: 2, bgcolor: 'info.light', borderRadius: 1 }}>
                   <CircularProgress size={20} />
-                  <Typography>Scanning...</Typography>
+                  <Box>
+                    <Typography variant="body2">Scanning Slave IDs {scanForm.start_id} to {scanForm.end_id}...</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {scanForm.baudrate} bps, Parity: {scanForm.parity}, Stop: {scanForm.stopbits}
+                    </Typography>
+                  </Box>
                 </Box>
               </Grid>
             )}
+            
             {scanResults.length > 0 && (
               <Grid item xs={12}>
-                <Typography variant="subtitle2" gutterBottom>Found Devices:</Typography>
-                <List dense>
-                  {scanResults.map((result, index) => (
-                    <ListItem key={index}>
-                      <ListItemText primary={`Slave ID ${result.slave_id}`} secondary={result.response} />
-                    </ListItem>
-                  ))}
-                </List>
+                <Paper sx={{ p: 2, bgcolor: 'success.light' }}>
+                  <Typography variant="subtitle2" gutterBottom fontWeight="bold">
+                    ✅ Found {scanResults.length} Device(s):
+                  </Typography>
+                  <List dense>
+                    {scanResults.map((result, index) => (
+                      <ListItem key={index} sx={{ bgcolor: 'white', mb: 0.5, borderRadius: 1 }}>
+                        <ListItemText
+                          primary={
+                            <Box display="flex" alignItems="center" gap={1}>
+                              <Chip label={`Slave ID ${result.slave_id}`} size="small" color="success" />
+                              <Typography variant="body2">{result.response}</Typography>
+                            </Box>
+                          }
+                          secondary={`${result.baudrate} bps on ${result.port}`}
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                </Paper>
+              </Grid>
+            )}
+            
+            {!scanning && scanResults.length === 0 && scanForm.start_id > 0 && (
+              <Grid item xs={12}>
+                <Alert severity="info">
+                  Ready to scan. Click "Start Scan" to begin searching for devices.
+                </Alert>
               </Grid>
             )}
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpenScanDialog(false)}>Close</Button>
+          <Button onClick={() => {
+            setOpenScanDialog(false);
+            setScanResults([]);
+          }}>Close</Button>
           <Button onClick={handleScan} variant="contained" disabled={scanning}
             startIcon={scanning ? <CircularProgress size={20} /> : <Search />}>
             {scanning ? 'Scanning...' : 'Start Scan'}

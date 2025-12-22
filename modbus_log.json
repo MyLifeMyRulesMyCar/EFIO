@@ -52,5 +52,126 @@
     "device_id": "dev_1766152125_1",
     "message": "Read failed: No communication with the instrument (no answer)",
     "data": null
+  },
+  {
+    "timestamp": "2025-12-21T14:58:13.566166",
+    "type": "connected",
+    "device_id": "dev_1766152125_1",
+    "message": "Connected to 'test'",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-21T14:58:21.386896",
+    "type": "read",
+    "device_id": "dev_1766152125_1",
+    "message": "Read FC3 from 0, count=1",
+    "data": [
+      {
+        "register": 0,
+        "value": 1235
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-12-21T14:58:46.196874",
+    "type": "read",
+    "device_id": "dev_1766152125_1",
+    "message": "Read FC3 from 0, count=1",
+    "data": [
+      {
+        "register": 0,
+        "value": 78
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-12-21T14:59:07.900282",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10, found 0 devices",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-21T14:59:17.022608",
+    "type": "device_deleted",
+    "device_id": "dev_1766152125_1",
+    "message": "Device 'test' deleted",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-21T14:59:35.841280",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10, found 0 devices",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-22T12:50:15.696131",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10 @ 9600 baud, found 0 devices",
+    "data": {
+      "found_devices": []
+    }
+  },
+  {
+    "timestamp": "2025-12-22T12:51:32.261337",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10 @ 9600 baud, found 1 devices",
+    "data": {
+      "found_devices": [
+        {
+          "slave_id": 1,
+          "port": "ttyS2",
+          "baudrate": 9600,
+          "response": "FC3 Register 0 = 0"
+        }
+      ]
+    }
+  },
+  {
+    "timestamp": "2025-12-22T12:59:41.947630",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10 @ 9600 baud, found 0 devices",
+    "data": {
+      "found_devices": []
+    }
+  },
+  {
+    "timestamp": "2025-12-22T13:22:21.353264",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10, found 0 devices",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-22T13:25:10.806488",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10, found 1 devices",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-22T13:41:54.197230",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10, found 1 devices",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-22T13:42:53.905999",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10, found 1 devices",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-22T13:43:12.328249",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10, found 0 devices",
+    "data": null
   }
 ]

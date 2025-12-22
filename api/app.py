@@ -24,6 +24,7 @@ from api.modbus_routes import modbus_api
 from api.auth_routes import auth_api
 from api.config_routes import config_api
 from api.modbus_device_routes import modbus_device_api
+from api.oled_routes import oled_api, init_oled_display, stop_oled_display
 # ============================================
 # Initialize Flask app
 # ============================================
@@ -62,6 +63,7 @@ app.register_blueprint(modbus_api)
 app.register_blueprint(auth_api)
 app.register_blueprint(config_api)
 app.register_blueprint(modbus_device_api)
+app.register_blueprint(oled_api)
 
 print("=" * 50)
 print("EFIO API Server Starting...")
@@ -578,6 +580,11 @@ if __name__ == '__main__':
     # Start background thread
     start_background_thread()
     
+    init_oled_display()
+    import atexit
+    atexit.register(stop_oled_display)
+    start_background_thread()
+
     # Run with SocketIO
     socketio.run(
         app, 

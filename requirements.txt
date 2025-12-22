@@ -1,0 +1,89 @@
+# EFIO Edge Controller - Python Dependencies
+# Install with: pip3 install -r requirements.txt
+
+# ============================================
+# Core Web Framework
+# ============================================
+Flask==3.0.0
+Flask-SocketIO==5.3.5
+Flask-CORS==4.0.0
+Flask-JWT-Extended==4.6.0
+python-socketio==5.10.0
+python-engineio==4.8.0
+Werkzeug==3.0.1
+
+# ============================================
+# MQTT Communication
+# ============================================
+paho-mqtt==1.6.1
+
+# ============================================
+# Modbus RTU Communication
+# ============================================
+minimalmodbus==2.1.1
+pyserial==3.5
+
+# ============================================
+# GPIO Control (for Rockchip/ARM boards)
+# ============================================
+# Note: python3-libgpiod should be installed via apt on Debian/Ubuntu
+# sudo apt-get install python3-libgpiod
+# If pip version needed:
+# libgpiod==2.1.0
+
+# ============================================
+# I2C/Peripheral Access (for OLED)
+# ============================================
+python-periphery==2.4.1
+
+# ============================================
+# Image Processing (OLED, QR codes)
+# ============================================
+Pillow==10.1.0
+qrcode[pil]==7.4.2
+
+# ============================================
+# System Monitoring
+# ============================================
+psutil==5.9.6
+
+# ============================================
+# Security & Authentication
+# ============================================
+bcrypt==4.1.2
+PyJWT==2.8.0
+
+# ============================================
+# Network Interface Detection
+# ============================================
+netifaces==0.11.0
+
+# ============================================
+# Development Tools (Optional)
+# ============================================
+# Uncomment for development
+# pytest==7.4.3
+# pytest-flask==1.3.0
+# black==23.12.1
+# flake8==6.1.0
+
+# ============================================
+# Production Server (Optional)
+# ============================================
+# For production deployment, uncomment:
+# gunicorn==21.2.0
+# eventlet==0.33.3  # Recommended for Socket.IO in production
+
+# ============================================
+# Version Notes
+# ============================================
+# Python Version: 3.8+
+# Tested on: Python 3.10 (Ubuntu 22.04 on RK3588)
+# Platform: ARM64 (Rockchip RK3588)
+#
+# Installation Instructions:
+# 1. Update system: sudo apt-get update
+# 2. Install system dependencies:
+#    sudo apt-get install python3-pip python3-dev python3-libgpiod
+# 3. Install Python packages: pip3 install -r requirements.txt
+# 4. For production, also install: sudo apt-get install mosquitto
