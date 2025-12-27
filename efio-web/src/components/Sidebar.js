@@ -24,7 +24,8 @@ import {
   BugReport,
   NetworkCheck,
   Tune,
-  Logout
+  Logout,
+  Backup
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { SettingsInputComponent } from '@mui/icons-material'; 
@@ -38,6 +39,7 @@ const menuItems = [
   { text: 'Diagnostic', icon: <BugReport />, path: '/diagnostic' },
   { text: 'divider' },
   { text: 'Modbus Manager', icon: <SettingsInputComponent />, path: '/modbus' }, // NEW
+  { text: 'Backup & Restore', icon: <Backup />, path: '/backup' },
   { text: 'Network Config', icon: <NetworkCheck />, path: '/config/network', adminOnly: true },
   { text: 'I/O Config', icon: <Tune />, path: '/config/io' },
   { text: 'Settings', icon: <Settings />, path: '/settings' }

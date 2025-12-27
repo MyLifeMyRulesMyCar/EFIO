@@ -19,6 +19,7 @@ import NetworkSettings from './pages/NetworkSettings';
 import IOConfiguration from './pages/IOConfiguration';
 import useEFIOWebSocket from './hooks/useEFIOWebSocket';
 import ModbusManager from './pages/ModbusManager';
+import BackupRestore from './pages/BackupRestore'; 
 
 const drawerWidth = 240;
 
@@ -107,6 +108,13 @@ function MainLayout() {
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/diagnostic" element={<Diagnostic />} />
           <Route path="/modbus" element={<ModbusManager />} />
+
+           {/* ADD THIS ROUTE HERE: */}
+          <Route path="/backup" element={
+           <ProtectedRoute requiredRole="admin">
+            <BackupRestore />
+           </ProtectedRoute>
+           } />  {/* ← NEW */}
           
           {/* Configuration routes */}
           <Route path="/config/network" element={
