@@ -26,6 +26,7 @@ from api.config_routes import config_api
 from api.modbus_device_routes import modbus_device_api
 from api.oled_routes import oled_api, init_oled_display, stop_oled_display
 from api.backup_routes import backup_api 
+from api.mqtt_routes import mqtt_config_api
 # ============================================
 # Initialize Flask app
 # ============================================
@@ -66,6 +67,7 @@ app.register_blueprint(config_api)
 app.register_blueprint(modbus_device_api)
 app.register_blueprint(oled_api)
 app.register_blueprint(backup_api)
+app.register_blueprint(mqtt_config_api)
 
 print("=" * 50)
 print("EFIO API Server Starting...")
@@ -161,7 +163,7 @@ def init_mqtt():
     global mqtt_client
     
     try:
-        mqtt_client = mqtt.Client(client_id="efio_flask_api")
+        mqtt_client = mqtt.Client(client_id="efio-daemon")
         mqtt_client.on_connect = on_mqtt_connect
         mqtt_client.on_disconnect = on_mqtt_disconnect
         mqtt_client.on_message = on_mqtt_message
@@ -569,6 +571,7 @@ if __name__ == '__main__':
     print("=" * 50)
     print(f"📡 HTTP API: http://0.0.0.0:5000")
     print(f"🔌 WebSocket: ws://0.0.0.0:5000")
+    print("MQTT Config API registered")
     print(f"🌐 CORS: Enabled for all origins")
     print("=" * 50 + "\n")
     

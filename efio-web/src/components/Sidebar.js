@@ -15,6 +15,7 @@ import {
   Divider,
   Box,
   Button
+  
 } from '@mui/material';
 import {
   Dashboard as DashboardIcon,
@@ -25,7 +26,8 @@ import {
   NetworkCheck,
   Tune,
   Logout,
-  Backup
+  Backup,
+  Wifi
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { SettingsInputComponent } from '@mui/icons-material'; 
@@ -38,10 +40,12 @@ const menuItems = [
   { text: 'System Metrics', icon: <Assessment />, path: '/metrics' },
   { text: 'Diagnostic', icon: <BugReport />, path: '/diagnostic' },
   { text: 'divider' },
-  { text: 'Modbus Manager', icon: <SettingsInputComponent />, path: '/modbus' }, // NEW
-  { text: 'Backup & Restore', icon: <Backup />, path: '/backup' },
+  { text: 'Modbus Manager', icon: <SettingsInputComponent />, path: '/modbus' },
+  { text: 'Backup & Restore', icon: <Backup />, path: '/backup', adminOnly: true },
+  { text: 'divider' },  // ADD THIS DIVIDER
   { text: 'Network Config', icon: <NetworkCheck />, path: '/config/network', adminOnly: true },
   { text: 'I/O Config', icon: <Tune />, path: '/config/io' },
+  { text: 'MQTT Settings', icon: <Wifi />, path: '/config/mqtt', adminOnly: true },  // ← ADD THIS
   { text: 'Settings', icon: <Settings />, path: '/settings' }
 ];
 

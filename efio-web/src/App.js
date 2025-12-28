@@ -20,6 +20,7 @@ import IOConfiguration from './pages/IOConfiguration';
 import useEFIOWebSocket from './hooks/useEFIOWebSocket';
 import ModbusManager from './pages/ModbusManager';
 import BackupRestore from './pages/BackupRestore'; 
+import MQTTSettings from './pages/MQTTSettings';
 
 const drawerWidth = 240;
 
@@ -122,6 +123,14 @@ function MainLayout() {
               <NetworkSettings />
             </ProtectedRoute>
           } />
+
+          {/* ADD THIS ROUTE: */}
+        <Route path="/config/mqtt" element={
+          <ProtectedRoute requiredRole="admin">
+          <MQTTSettings />
+          </ProtectedRoute>
+            } />
+            
           <Route path="/config/io" element={<IOConfiguration />} />
           
           <Route path="/settings" element={<Settings />} />

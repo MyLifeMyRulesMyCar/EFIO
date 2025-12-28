@@ -1,0 +1,10 @@
+{
+  "broker": "localhost",
+  "client_id": "efio-daemon",
+  "keepalive": 60,
+  "password": "testpass",
+  "port": 1883,
+  "qos": 1,
+  "use_tls": false,
+  "username": "testuser"
+}
