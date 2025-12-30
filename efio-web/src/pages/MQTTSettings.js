@@ -49,41 +49,74 @@ export default function MQTTSettings() {
     }
   };
 
-  const handleSave = async () => {
-    if (!hasRole('admin')) {
-      setMessage({ type: 'error', text: 'Admin access required' });
-      return;
-    }
+const handleSave = async () => {
+  if (!hasRole('admin')) {
+    setMessage({ type: 'error', text: 'Admin access required' });
+    return;
+  }
 
-    setSaving(true);
-    setMessage(null);
+  setSaving(true);
+  setMessage(null);
 
-    try {
-      const response = await fetch('http://192.168.5.103:5000/api/config/mqtt', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeader()
-        },
-        body: JSON.stringify(config)
+  try {
+    // Step 1: Save configuration
+    const response = await fetch('http://192.168.5.103:5000/api/config/mqtt', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeader()
+      },
+      body: JSON.stringify(config)
+    });
+
+    const data = await response.json();
+
+    if (response.ok) {
+      setMessage({ 
+        type: 'success', 
+        text: 'MQTT configuration saved. Reloading connection...' 
       });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setMessage({ 
-          type: 'success', 
-          text: 'MQTT configuration saved. Restart service for changes to take effect.' 
+      
+      // Step 2: Reload MQTT without restart
+      try {
+        const reloadResponse = await fetch('http://192.168.5.103:5000/api/config/mqtt/reload', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeader()
+          }
         });
-      } else {
-        setMessage({ type: 'error', text: data.error || 'Failed to save configuration' });
+        
+        const reloadData = await reloadResponse.json();
+        
+        if (reloadResponse.ok && reloadData.success) {
+          setMessage({ 
+            type: 'success', 
+            text: '✅ MQTT configuration saved and reloaded successfully! No restart needed.' 
+          });
+        } else {
+          setMessage({ 
+            type: 'warning', 
+            text: 'Configuration saved but reload failed. Please restart the service manually.' 
+          });
+        }
+      } catch (reloadError) {
+        console.error('Reload error:', reloadError);
+        setMessage({ 
+          type: 'warning', 
+          text: 'Configuration saved but reload failed. Please restart the service manually.' 
+        });
       }
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Network error' });
-    } finally {
-      setSaving(false);
+      
+    } else {
+      setMessage({ type: 'error', text: data.error || 'Failed to save configuration' });
     }
-  };
+  } catch (error) {
+    setMessage({ type: 'error', text: 'Network error' });
+  } finally {
+    setSaving(false);
+  }
+};
 
   const handleTestConnection = async () => {
     setTesting(true);
@@ -147,6 +180,19 @@ export default function MQTTSettings() {
             <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 2 }}>
               Configure MQTT broker for I/O state publishing
             </Typography>
+              <FormControlLabel
+                control={
+                <Switch
+                checked={config.enabled}
+                onChange={(e) =>
+                setConfig({ ...config, enabled: e.target.checked })
+                  }
+                color="success"
+                  />
+                    }
+                  label="Enable MQTT Publishing"
+                  sx={{ mb: 2 }}
+                    />
 
             <Grid container spacing={2}>
               <Grid item xs={12} md={8}>
@@ -230,26 +276,47 @@ export default function MQTTSettings() {
 
         {/* Status & Test */}
         <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 3, mb: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Connection Status
-            </Typography>
-            <Box display="flex" alignItems="center" gap={1} mb={2}>
-              <Chip
-                icon={<CheckCircle />}
-                label="Connected"
-                color="success"
-                size="small"
-              />
-            </Box>
-            <Typography variant="body2" color="text.secondary">
-              Broker: {config.broker}:{config.port}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Client: {config.client_id}
-            </Typography>
-          </Paper>
-
+        <Paper sx={{ p: 3, mb: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Connection Status
+          </Typography>
+          
+          {/* ADD THIS: Show enabled status */}
+          <Box display="flex" alignItems="center" gap={1} mb={2}>
+            <Chip
+              icon={config.enabled ? <CheckCircle /> : <Cancel />}
+              label={config.enabled ? "MQTT Enabled" : "MQTT Disabled"}
+              color={config.enabled ? "success" : "default"}
+              size="small"
+            />
+          </Box>
+          
+          {/* Only show connection status if enabled */}
+          {config.enabled && (
+            <>
+              <Box display="flex" alignItems="center" gap={1} mb={2}>
+                <Chip
+                  icon={<CheckCircle />}
+                  label="Connected"
+                  color="success"
+                  size="small"
+                />
+              </Box>
+              <Typography variant="body2" color="text.secondary">
+                Broker: {config.broker}:{config.port}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Client: {config.client_id}
+              </Typography>
+            </>
+          )}
+          
+          {!config.enabled && (
+            <Alert severity="info" sx={{ mt: 2 }}>
+              MQTT publishing is disabled. Enable it to publish I/O data to the broker.
+            </Alert>
+          )}
+        </Paper>
           {testResult && (
             <Paper sx={{ p: 3, mb: 2, bgcolor: testResult.success ? 'success.light' : 'error.light' }}>
               <Box display="flex" alignItems="center" gap={1} mb={1}>
@@ -320,6 +387,37 @@ export default function MQTTSettings() {
             >
               {saving ? 'Saving...' : 'Save Configuration'}
             </Button>
+
+        <Button
+      variant="outlined"
+      color="secondary"
+      startIcon={<Refresh />}
+      onClick={async () => {
+        try {
+          setMessage({ type: 'info', text: 'Reloading MQTT connection...' });
+          
+          const response = await fetch('http://192.168.5.103:5000/api/config/mqtt/reload', {
+            method: 'POST',
+            headers: getAuthHeader()
+          });
+          
+          const data = await response.json();
+          
+          if (response.ok && data.success) {
+            setMessage({ type: 'success', text: 'MQTT reloaded successfully!' });
+          } else {
+            setMessage({ type: 'error', text: 'Reload failed' });
+          }
+        } catch (error) {
+          setMessage({ type: 'error', text: 'Reload error: ' + error.message });
+        }
+      }}
+      disabled={!hasRole('admin')}
+    >
+      Reload Connection
+    </Button>
+
+
             <Button
               variant="outlined"
               startIcon={<Refresh />}

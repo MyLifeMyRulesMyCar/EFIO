@@ -57,6 +57,10 @@ class EFIODeviceDaemon:
         
     def _init_mqtt(self):
         """Initialize MQTT client for publishing I/O changes"""
+
+        if not self.mqtt_config.get('enabled', True):
+            print("⚠️ MQTT: Disabled in configuration")
+            return False
         try:
             # Create client with configured client ID
             client_id = self.mqtt_config.get('client_id', 'efio-daemon')

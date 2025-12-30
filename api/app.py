@@ -59,6 +59,7 @@ socketio = SocketIO(
 DEBUG_MQTT = False  # Set to True for verbose MQTT logging
 daemon = EFIODeviceDaemon(debug_mqtt=DEBUG_MQTT)
 daemon.start()
+app.daemon = daemon 
 
 # Register blueprints
 app.register_blueprint(modbus_api)
@@ -79,7 +80,44 @@ print("=" * 50)
 # MQTT Integration
 # ============================================
 
+
+
 mqtt_client = None
+
+_mqtt_callbacks = {
+    'on_connect': None,
+    'on_disconnect': None,
+    'on_message': None
+}
+
+
+MQTT_CONFIG_FILE = "/home/radxa/efio/mqtt_config.json"
+
+DEFAULT_MQTT_CONFIG = {
+    "broker": "localhost",
+    "port": 1883,
+    "username": "",
+    "password": "",
+    "client_id": "efio-daemon",
+    "use_tls": False,
+    "keepalive": 60,
+    "qos": 1
+}
+
+def load_mqtt_config():
+    """Load MQTT configuration from file"""
+    if not os.path.exists(MQTT_CONFIG_FILE):
+        return DEFAULT_MQTT_CONFIG
+    
+    try:
+        with open(MQTT_CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            print(f"✅ Loaded MQTT config: {config['broker']}:{config['port']}")
+            return config
+    except Exception as e:
+        print(f"❌ Error loading MQTT config: {e}")
+        return DEFAULT_MQTT_CONFIG
+
 
 def on_mqtt_connect(client, userdata, flags, rc):
     """Callback when MQTT client connects"""
@@ -158,31 +196,77 @@ def on_mqtt_message(client, userdata, msg):
         import traceback
         traceback.print_exc()
 
+_mqtt_callbacks['on_connect'] = on_mqtt_connect
+_mqtt_callbacks['on_disconnect'] = on_mqtt_disconnect
+_mqtt_callbacks['on_message'] = on_mqtt_message
+
 def init_mqtt():
     """Initialize MQTT client"""
     global mqtt_client
     
     try:
-        mqtt_client = mqtt.Client(client_id="efio-daemon")
+        # Stop existing client if running
+        if mqtt_client:
+            try:
+                mqtt_client.loop_stop()
+                mqtt_client.disconnect()
+                print("🔄 Stopped existing MQTT client")
+            except Exception as e:
+                print(f"⚠️ Error stopping old client: {e}")
+        
+        # Load MQTT configuration
+        mqtt_config = load_mqtt_config()
+        
+        # Check if MQTT is enabled
+        if not mqtt_config.get('enabled', True):
+            print("⚠️ API MQTT: Disabled in configuration")
+            mqtt_client = None  # Set to None when disabled
+            return False
+        
+        # Create client with configured ID
+        client_id = mqtt_config.get('client_id', 'efio-api')
+        mqtt_client = mqtt.Client(client_id=client_id + "-api")
+        
         mqtt_client.on_connect = on_mqtt_connect
         mqtt_client.on_disconnect = on_mqtt_disconnect
         mqtt_client.on_message = on_mqtt_message
         
-        # Connect to local Mosquitto broker
-        mqtt_client.connect("localhost", 1883, 60)
+        # Configure authentication if provided
+        username = mqtt_config.get('username', '')
+        password = mqtt_config.get('password', '')
+        if username and password:
+            mqtt_client.username_pw_set(username, password)
+            print(f"🔐 API MQTT: Using authentication (user: {username})")
+        
+        # Configure TLS if enabled
+        if mqtt_config.get('use_tls', False):
+            mqtt_client.tls_set()
+            print("🔒 API MQTT: TLS/SSL enabled")
+        
+        # Connect to broker
+        broker = mqtt_config.get('broker', 'localhost')
+        port = mqtt_config.get('port', 1883)
+        keepalive = mqtt_config.get('keepalive', 60)
+        
+        mqtt_client.connect(broker, port, keepalive)
         mqtt_client.loop_start()
         
-        print("🔌 MQTT: Client initialized")
+        print("🔌 API MQTT: Client initialized and connected")
         return True
         
     except Exception as e:
         print(f"❌ MQTT: Initialization failed: {e}")
-        print("⚠️ MQTT: System will continue without MQTT (fallback mode)")
+        mqtt_client = None
         return False
 
 # Helper function to publish to MQTT
 def mqtt_publish(topic, payload, retain=False):
     """Publish message to MQTT broker"""
+    # Check if MQTT is enabled
+    mqtt_config = load_mqtt_config()
+    if not mqtt_config.get('enabled', True):
+        return False  # Skip publishing if disabled
+    
     if mqtt_client and mqtt_client.is_connected():
         try:
             mqtt_client.publish(topic, payload, retain=retain)
@@ -191,6 +275,8 @@ def mqtt_publish(topic, payload, retain=False):
             print(f"❌ MQTT publish error: {e}")
             return False
     return False
+
+
 
 # ============================================
 # REST API Endpoints

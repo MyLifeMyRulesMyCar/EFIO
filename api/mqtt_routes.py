@@ -1,7 +1,7 @@
 # api/mqtt_routes.py
 # MQTT Configuration Management
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import jwt_required, get_jwt
 import json
 import os
@@ -12,6 +12,7 @@ mqtt_config_api = Blueprint('mqtt_config_api', __name__)
 MQTT_CONFIG_FILE = "/home/radxa/efio/mqtt_config.json"
 
 DEFAULT_MQTT_CONFIG = {
+    "enabled": True,  
     "broker": "localhost",
     "port": 1883,
     "username": "",
@@ -182,3 +183,194 @@ def get_mqtt_status():
         "connected": True,  # TODO: Query actual daemon status
         "last_message": "2 seconds ago"
     }), 200
+
+
+@mqtt_config_api.route('/api/config/mqtt/reload', methods=['POST'])
+@jwt_required()
+def reload_mqtt_config():
+    """Reload MQTT configuration without restarting (admin only)"""
+    if not admin_required():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        print("🔄 Reloading MQTT configuration...")
+        
+        # Get daemon from Flask app context (no re-import!)
+        daemon = current_app.daemon
+        daemon.reload_mqtt_config()
+        print("✅ Daemon MQTT reloaded")
+        
+        # Reload API's MQTT client (access via current_app extensions)
+        from flask import current_app as app
+        
+        # Get the actual mqtt_client from app's module
+        import sys
+        app_module = sys.modules.get('api.app')
+        
+        if app_module is None:
+            print("⚠️ Could not find api.app module")
+            return jsonify({
+                "success": True,
+                "message": "Daemon MQTT reloaded (API MQTT unavailable)"
+            }), 200
+        
+        # Stop existing API MQTT client
+        if hasattr(app_module, 'mqtt_client') and app_module.mqtt_client:
+            try:
+                app_module.mqtt_client.loop_stop()
+                app_module.mqtt_client.disconnect()
+                print("🔄 Stopped existing API MQTT client")
+            except Exception as e:
+                print(f"⚠️ Error stopping API MQTT: {e}")
+        
+        # Re-initialize API MQTT client
+        mqtt_config = load_mqtt_config()
+        
+        # Check if MQTT is enabled
+        if not mqtt_config.get('enabled', True):
+            print("⚠️ API MQTT: Disabled in configuration")
+            app_module.mqtt_client = None
+            return jsonify({
+                "success": True,
+                "message": "MQTT disabled - connections closed"
+            }), 200
+        
+        # Create new MQTT client
+        client_id = mqtt_config.get('client_id', 'efio-api') + "-api"
+        new_mqtt_client = mqtt.Client(client_id=client_id)
+        
+        # Get callbacks from the module (they're already defined)
+        if hasattr(app_module, '_mqtt_callbacks'):
+            callbacks = app_module._mqtt_callbacks
+            new_mqtt_client.on_connect = callbacks['on_connect']
+            new_mqtt_client.on_disconnect = callbacks['on_disconnect']
+            new_mqtt_client.on_message = callbacks['on_message']
+        else:
+            # Fallback: get them directly
+            new_mqtt_client.on_connect = getattr(app_module, 'on_mqtt_connect', None)
+            new_mqtt_client.on_disconnect = getattr(app_module, 'on_mqtt_disconnect', None)
+            new_mqtt_client.on_message = getattr(app_module, 'on_mqtt_message', None)
+        
+        # Configure authentication
+        username = mqtt_config.get('username', '')
+        password = mqtt_config.get('password', '')
+        if username and password:
+            new_mqtt_client.username_pw_set(username, password)
+            print(f"🔐 API MQTT: Using authentication (user: {username})")
+        
+        # Configure TLS
+        if mqtt_config.get('use_tls', False):
+            new_mqtt_client.tls_set()
+            print("🔒 API MQTT: TLS/SSL enabled")
+        
+        # Connect
+        broker = mqtt_config.get('broker', 'localhost')
+        port = mqtt_config.get('port', 1883)
+        keepalive = mqtt_config.get('keepalive', 60)
+        
+        new_mqtt_client.connect(broker, port, keepalive)
+        new_mqtt_client.loop_start()
+        
+        # Update the module's mqtt_client reference
+        app_module.mqtt_client = new_mqtt_client
+        
+        print("✅ API MQTT configuration reloaded successfully")
+        
+        return jsonify({
+            "success": True,
+            "message": "MQTT configuration reloaded successfully (both daemon and API)"
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Reload error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+'''
+@mqtt_config_api.route('/api/config/mqtt/reload', methods=['POST'])
+@jwt_required()
+def reload_mqtt_config():
+    """Reload MQTT configuration without restarting (admin only)"""
+    if not admin_required():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        from flask import current_app
+        
+        print("🔄 Reloading MQTT configuration...")
+        
+        # Reload daemon's MQTT (DON'T recreate daemon, just reload its MQTT)
+        daemon = current_app.daemon
+        daemon.reload_mqtt_config()
+        
+        # Reload API's MQTT (need to access the module-level mqtt_client)
+        import api.app as app_module
+        
+        # Stop existing API MQTT client
+        if app_module.mqtt_client:
+            try:
+                app_module.mqtt_client.loop_stop()
+                app_module.mqtt_client.disconnect()
+                print("🔄 Stopped existing API MQTT client")
+            except Exception as e:
+                print(f"⚠️ Error stopping API MQTT: {e}")
+        
+        # Re-initialize API MQTT client (this only recreates MQTT, not daemon)
+        mqtt_config = load_mqtt_config()
+        
+        # Check if MQTT is enabled
+        if not mqtt_config.get('enabled', True):
+            print("⚠️ API MQTT: Disabled in configuration")
+            app_module.mqtt_client = None
+            return jsonify({
+                "success": True,
+                "message": "MQTT disabled - no connection to reload"
+            }), 200
+        
+        # Create new MQTT client
+        client_id = mqtt_config.get('client_id', 'efio-api') + "-api"
+        app_module.mqtt_client = mqtt.Client(client_id=client_id)
+        
+        app_module.mqtt_client.on_connect = app_module.on_mqtt_connect
+        app_module.mqtt_client.on_disconnect = app_module.on_mqtt_disconnect
+        app_module.mqtt_client.on_message = app_module.on_mqtt_message
+        
+        # Configure authentication
+        username = mqtt_config.get('username', '')
+        password = mqtt_config.get('password', '')
+        if username and password:
+            app_module.mqtt_client.username_pw_set(username, password)
+        
+        # Configure TLS
+        if mqtt_config.get('use_tls', False):
+            app_module.mqtt_client.tls_set()
+        
+        # Connect
+        broker = mqtt_config.get('broker', 'localhost')
+        port = mqtt_config.get('port', 1883)
+        keepalive = mqtt_config.get('keepalive', 60)
+        
+        app_module.mqtt_client.connect(broker, port, keepalive)
+        app_module.mqtt_client.loop_start()
+        
+        print("✅ API MQTT configuration reloaded")
+        
+        return jsonify({
+            "success": True,
+            "message": "MQTT configuration reloaded successfully"
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Reload error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+'''
