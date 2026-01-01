@@ -23,10 +23,12 @@ from oled_manager.oled_service import show_qr, show_status, show_boot
 from api.modbus_routes import modbus_api
 from api.auth_routes import auth_api
 from api.config_routes import config_api
-from api.modbus_device_routes import modbus_device_api
+from api.modbus_device_routes import modbus_device_api,active_connections  
 from api.oled_routes import oled_api, init_oled_display, stop_oled_display
 from api.backup_routes import backup_api 
 from api.mqtt_routes import mqtt_config_api
+from api.modbus_mqtt_bridge_routes import modbus_mqtt_api, set_bridge_instance
+from efio_daemon.modbus_mqtt_bridge import ModbusMQTTBridge
 # ============================================
 # Initialize Flask app
 # ============================================
@@ -69,6 +71,7 @@ app.register_blueprint(modbus_device_api)
 app.register_blueprint(oled_api)
 app.register_blueprint(backup_api)
 app.register_blueprint(mqtt_config_api)
+app.register_blueprint(modbus_mqtt_api)
 
 print("=" * 50)
 print("EFIO API Server Starting...")
@@ -83,6 +86,7 @@ print("=" * 50)
 
 
 mqtt_client = None
+modbus_bridge = None
 
 _mqtt_callbacks = {
     'on_connect': None,
@@ -257,6 +261,43 @@ def init_mqtt():
     except Exception as e:
         print(f"❌ MQTT: Initialization failed: {e}")
         mqtt_client = None
+        return False
+
+def init_modbus_mqtt_bridge():
+    """Initialize Modbus-MQTT Bridge"""
+    global modbus_bridge
+    
+    try:
+        # Load MQTT configuration
+        mqtt_config = load_mqtt_config()
+        
+        # Create bridge instance with active Modbus connections
+        modbus_bridge = ModbusMQTTBridge(active_connections, mqtt_config)
+        
+        # Set bridge instance in routes module
+        set_bridge_instance(modbus_bridge)
+        
+        # Load saved configuration
+        from api.modbus_mqtt_bridge_routes import load_bridge_config
+        bridge_config = load_bridge_config()
+        
+        # Auto-start if enabled
+        if bridge_config.get('enabled', False):
+            mappings = bridge_config.get('mappings', [])
+            enabled_mappings = [m for m in mappings if m.get('enabled', True)]
+            
+            if enabled_mappings:
+                modbus_bridge.load_mappings(enabled_mappings)
+                poll_interval = bridge_config.get('poll_interval', 1.0)
+                modbus_bridge.set_poll_interval(poll_interval)
+                modbus_bridge.start()
+                print(f"✅ Modbus-MQTT Bridge: Auto-started with {len(enabled_mappings)} mappings")
+        
+        print("✅ Modbus-MQTT Bridge: Initialized")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Modbus-MQTT Bridge: Initialization failed: {e}")
         return False
 
 # Helper function to publish to MQTT
@@ -668,6 +709,7 @@ if __name__ == '__main__':
     else:
         print("⚠️ Running without MQTT (fallback mode)")
     
+    init_modbus_mqtt_bridge()
     # Start background thread
     start_background_thread()
     
@@ -675,6 +717,12 @@ if __name__ == '__main__':
     import atexit
     atexit.register(stop_oled_display)
     start_background_thread()
+
+        # Cleanup bridge on exit
+    def cleanup_bridge():
+        if modbus_bridge:
+            modbus_bridge.stop()
+    atexit.register(cleanup_bridge)
 
     # Run with SocketIO
     socketio.run(

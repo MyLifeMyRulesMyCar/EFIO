@@ -27,7 +27,8 @@ import {
   Tune,
   Logout,
   Backup,
-  Wifi
+  Wifi,
+  Transform
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { SettingsInputComponent } from '@mui/icons-material'; 
@@ -41,6 +42,7 @@ const menuItems = [
   { text: 'Diagnostic', icon: <BugReport />, path: '/diagnostic' },
   { text: 'divider' },
   { text: 'Modbus Manager', icon: <SettingsInputComponent />, path: '/modbus' },
+  { text: 'Modbus-MQTT Bridge', icon: <Transform />, path: '/modbus-mqtt-bridge' },
   { text: 'Backup & Restore', icon: <Backup />, path: '/backup', adminOnly: true },
   { text: 'divider' },  // ADD THIS DIVIDER
   { text: 'Network Config', icon: <NetworkCheck />, path: '/config/network', adminOnly: true },

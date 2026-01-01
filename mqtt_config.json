@@ -1,7 +1,7 @@
 {
   "broker": "localhost",
   "client_id": "efio-daemon",
-  "enabled": true,
+  "enabled": false,
   "keepalive": 60,
   "password": "testpass",
   "port": 1883,

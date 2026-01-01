@@ -1,0 +1,38 @@
+{
+  "enabled": false,
+  "poll_interval": 1.0,
+  "mappings": [
+    {
+      "id": "map_1767190297_0",
+      "device_id": "dev_1767190169_1",
+      "device_name": "test",
+      "register": 0,
+      "function_code": 3,
+      "topic": "block2/temp",
+      "name": "temp 01",
+      "unit": "c",
+      "enabled": true,
+      "scaling": {
+        "decimals": 0,
+        "multiplier": 1,
+        "offset": 0
+      }
+    },
+    {
+      "id": "map_1767190467_1",
+      "device_id": "dev_1767190169_1",
+      "device_name": "test",
+      "register": 1,
+      "function_code": 3,
+      "topic": "block9/Humididty",
+      "name": "humidity 01",
+      "unit": "%",
+      "enabled": true,
+      "scaling": {
+        "decimals": 0,
+        "multiplier": 1,
+        "offset": 0
+      }
+    }
+  ]
+}

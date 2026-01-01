@@ -173,5 +173,92 @@
     "device_id": "system",
     "message": "Scanned ttyS2 IDs 1-10, found 0 devices",
     "data": null
+  },
+  {
+    "timestamp": "2025-12-31T14:06:58.747803",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10, found 0 devices",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-31T14:09:04.524563",
+    "type": "scan",
+    "device_id": "system",
+    "message": "Scanned ttyS2 IDs 1-10, found 1 devices",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-31T14:09:29.405143",
+    "type": "device_created",
+    "device_id": "dev_1767190169_1",
+    "message": "Device 'test' created",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-31T14:09:31.952003",
+    "type": "connected",
+    "device_id": "dev_1767190169_1",
+    "message": "Connected to 'test'",
+    "data": null
+  },
+  {
+    "timestamp": "2025-12-31T14:09:37.811918",
+    "type": "read",
+    "device_id": "dev_1767190169_1",
+    "message": "Read FC3 from 0, count=1",
+    "data": [
+      {
+        "register": 0,
+        "value": 0
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-12-31T14:09:55.718848",
+    "type": "read",
+    "device_id": "dev_1767190169_1",
+    "message": "Read FC3 from 0, count=1",
+    "data": [
+      {
+        "register": 0,
+        "value": 12
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-12-31T14:10:02.483713",
+    "type": "read",
+    "device_id": "dev_1767190169_1",
+    "message": "Read FC3 from 0, count=2",
+    "data": [
+      {
+        "register": 0,
+        "value": 12
+      },
+      {
+        "register": 1,
+        "value": 56
+      }
+    ]
+  },
+  {
+    "timestamp": "2026-01-01T00:14:44.746133",
+    "type": "connected",
+    "device_id": "dev_1767190169_1",
+    "message": "Connected to 'test'",
+    "data": null
+  },
+  {
+    "timestamp": "2026-01-01T00:14:50.550463",
+    "type": "read",
+    "device_id": "dev_1767190169_1",
+    "message": "Read FC3 from 0, count=1",
+    "data": [
+      {
+        "register": 0,
+        "value": 123
+      }
+    ]
   }
 ]

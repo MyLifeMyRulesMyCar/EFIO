@@ -21,6 +21,7 @@ import useEFIOWebSocket from './hooks/useEFIOWebSocket';
 import ModbusManager from './pages/ModbusManager';
 import BackupRestore from './pages/BackupRestore'; 
 import MQTTSettings from './pages/MQTTSettings';
+import ModbusMQTTBridge from './pages/ModbusMQTTBridge';
 
 const drawerWidth = 240;
 
@@ -109,6 +110,7 @@ function MainLayout() {
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/diagnostic" element={<Diagnostic />} />
           <Route path="/modbus" element={<ModbusManager />} />
+          <Route path="/modbus-mqtt-bridge" element={<ModbusMQTTBridge />} />
 
            {/* ADD THIS ROUTE HERE: */}
           <Route path="/backup" element={
