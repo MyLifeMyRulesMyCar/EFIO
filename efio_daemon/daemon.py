@@ -8,6 +8,7 @@ import json
 import os
 from efio_daemon.io_manager import IOManager
 from efio_daemon.state import state
+from api.mqtt_config import load_mqtt_config, DEFAULT_MQTT_CONFIG
 
 # MQTT Configuration file path
 MQTT_CONFIG_FILE = "/home/radxa/efio/mqtt_config.json"

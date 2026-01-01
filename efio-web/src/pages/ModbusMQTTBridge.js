@@ -30,7 +30,7 @@ export default function ModbusMQTTBridge() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
   const [pollInterval, setPollInterval] = useState(1.0);
-
+  const [mqttEnabled, setMqttEnabled] = useState(true);
   const [formData, setFormData] = useState({
     device_id: '',
     device_name: '',
@@ -57,6 +57,7 @@ export default function ModbusMQTTBridge() {
     await Promise.all([
       loadMappings(),
       loadAvailableDevices(),
+      loadMqttStatus(),
       loadStatus()
     ]);
     setLoading(false);
@@ -75,6 +76,20 @@ export default function ModbusMQTTBridge() {
       console.error('Error loading mappings:', error);
     }
   };
+  // Add to loadData function
+const loadMqttStatus = async () => {
+  try {
+    const response = await fetch('http://192.168.5.103:5000/api/config/mqtt', {
+      headers: getAuthHeader()
+    });
+    if (response.ok) {
+      const data = await response.json();
+      setMqttEnabled(data.enabled || false);
+    }
+  } catch (error) {
+    console.error('Error loading MQTT status:', error);
+  }
+};
 
   const loadAvailableDevices = async () => {
     try {
@@ -161,25 +176,33 @@ export default function ModbusMQTTBridge() {
     }
   };
 
-  const handleStartBridge = async () => {
-    try {
-      const response = await fetch('http://192.168.5.103:5000/api/modbus-mqtt/start', {
-        method: 'POST',
-        headers: getAuthHeader()
-      });
+const handleStartBridge = async () => {
+  try {
+    const response = await fetch('http://192.168.5.103:5000/api/modbus-mqtt/start', {
+      method: 'POST',
+      headers: getAuthHeader()
+    });
 
-      const data = await response.json();
+    const data = await response.json();
 
-      if (response.ok) {
-        setMessage({ type: 'success', text: 'Bridge started successfully' });
-        loadStatus();
+    if (response.ok) {
+      setMessage({ type: 'success', text: 'Bridge started successfully' });
+      loadStatus();
+    } else {
+      // ✅ NEW: Enhanced error message for disabled MQTT
+      if (data.error && data.error.includes('MQTT publishing is disabled')) {
+        setMessage({ 
+          type: 'warning', 
+          text: '⚠️ MQTT is disabled. Please enable MQTT in Settings → MQTT Settings first, then try again.' 
+        });
       } else {
         setMessage({ type: 'error', text: data.error || 'Failed to start bridge' });
       }
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Network error' });
     }
-  };
+  } catch (error) {
+    setMessage({ type: 'error', text: 'Network error' });
+  }
+};
 
   const handleStopBridge = async () => {
     try {

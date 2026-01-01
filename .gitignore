@@ -9,3 +9,12 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Sensitive / runtime configs
+*.json
+# OR more specific (recommended)
+mqtt_config.json
+users.json
+pairing.json
+modbus_logs.json
+modbus_devices.json

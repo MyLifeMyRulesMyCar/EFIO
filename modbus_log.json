@@ -260,5 +260,26 @@
         "value": 123
       }
     ]
+  },
+  {
+    "timestamp": "2026-01-01T02:34:36.848491",
+    "type": "connected",
+    "device_id": "dev_1767190169_1",
+    "message": "Connected to 'test'",
+    "data": null
+  },
+  {
+    "timestamp": "2026-01-01T03:23:18.470729",
+    "type": "connected",
+    "device_id": "dev_1767190169_1",
+    "message": "Connected to 'test'",
+    "data": null
+  },
+  {
+    "timestamp": "2026-01-01T06:07:49.559195",
+    "type": "connected",
+    "device_id": "dev_1767190169_1",
+    "message": "Connected to 'test'",
+    "data": null
   }
 ]

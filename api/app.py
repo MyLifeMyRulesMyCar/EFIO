@@ -29,6 +29,7 @@ from api.backup_routes import backup_api
 from api.mqtt_routes import mqtt_config_api
 from api.modbus_mqtt_bridge_routes import modbus_mqtt_api, set_bridge_instance
 from efio_daemon.modbus_mqtt_bridge import ModbusMQTTBridge
+from api.mqtt_config import load_mqtt_config
 # ============================================
 # Initialize Flask app
 # ============================================
@@ -108,6 +109,7 @@ DEFAULT_MQTT_CONFIG = {
     "qos": 1
 }
 
+'''
 def load_mqtt_config():
     """Load MQTT configuration from file"""
     if not os.path.exists(MQTT_CONFIG_FILE):
@@ -122,7 +124,7 @@ def load_mqtt_config():
         print(f"❌ Error loading MQTT config: {e}")
         return DEFAULT_MQTT_CONFIG
 
-
+'''
 def on_mqtt_connect(client, userdata, flags, rc):
     """Callback when MQTT client connects"""
     if rc == 0:

@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request
 from efio_daemon.modbus_manager import modbus_manager
 from efio_daemon.state import state
+from api.mqtt_config import load_mqtt_config, DEFAULT_MQTT_CONFIG
 
 modbus_api = Blueprint("modbus_api", __name__)
 

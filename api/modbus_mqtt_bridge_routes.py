@@ -238,6 +238,18 @@ def start_bridge():
     if not bridge_instance:
         return jsonify({"error": "Bridge not initialized"}), 500
     
+    from api.mqtt_config import load_mqtt_config
+    mqtt_config = load_mqtt_config()
+    
+    if not mqtt_config.get('enabled', True):
+        return jsonify({
+            "error": "MQTT publishing is disabled. Please enable MQTT in MQTT Settings first.",
+            "hint": "Go to Settings → MQTT Settings and enable MQTT publishing"
+        }), 400
+    
+    if not bridge_instance:
+        return jsonify({"error": "Bridge not initialized"}), 500
+    
     # Load configuration
     config = load_bridge_config()
     mappings = config.get('mappings', [])
