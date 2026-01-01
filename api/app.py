@@ -40,7 +40,22 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 28800  # 8 hours
 app.config['JWT_REFRESH_TOKEN_EXPIRES'] = 2592000  # 30 days
 
 # Enable CORS for all routes
-CORS(app, resources={r"/*": {"origins": "*"}})
+# Allow only your specific frontend origins
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",           # Development
+    "http://192.168.5.103:3000",       # Dev on device
+    "http://192.168.5.103:5000",       # Production (served by Flask)
+    "http://192.168.100.1:5000",       # LAN interface
+]
+
+CORS(app, resources={
+    r"/*": {
+        "origins": ALLOWED_ORIGINS,
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True
+    }
+})
 
 
 

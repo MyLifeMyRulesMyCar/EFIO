@@ -1,16 +1,16 @@
-// src/App.js
-// Main application component with routing
+// src/App.js - UPDATED: Handle forced password changes
 
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { Box, CssBaseline, Toolbar } from '@mui/material';
+import { Box, CssBaseline, Toolbar, Alert } from '@mui/material';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 
-import { AuthProvider } from './contexts/AuthContext';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Login from './pages/Login';
+import ChangePassword from './pages/ChangePassword';  // NEW IMPORT
 import Dashboard from './pages/Dashboard';
 import IOStatus from './pages/IOStatus';
 import Metrics from './pages/Metrics';
@@ -25,38 +25,24 @@ import ModbusMQTTBridge from './pages/ModbusMQTTBridge';
 
 const drawerWidth = 240;
 
-// Create Material-UI theme
 const theme = createTheme({
   palette: {
-    primary: {
-      main: '#667eea',
-    },
-    secondary: {
-      main: '#764ba2',
-    },
-    success: {
-      main: '#10b981',
-      light: '#d1fae5',
-    },
-    warning: {
-      main: '#f59e0b',
-      light: '#fef3c7',
-    },
-    error: {
-      main: '#ef4444',
-    },
+    primary: { main: '#667eea' },
+    secondary: { main: '#764ba2' },
+    success: { main: '#10b981', light: '#d1fae5' },
+    warning: { main: '#f59e0b', light: '#fef3c7' },
+    error: { main: '#ef4444' },
   },
   typography: {
     fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
   },
 });
 
-// Settings page placeholder
 function Settings() {
   return (
     <Box sx={{ p: 3 }}>
       <h2>Settings</h2>
-      <p>Settings page coming soon in Week 2...</p>
+      <p>Settings page coming soon...</p>
     </Box>
   );
 }
@@ -67,10 +53,11 @@ function App() {
       <AuthProvider>
         <BrowserRouter>
           <Routes>
-            {/* Public route */}
             <Route path="/login" element={<Login />} />
             
-            {/* Protected routes */}
+            {/* NEW: Password change route (allow access immediately after login) */}
+            <Route path="/change-password" element={<ChangePassword />} />
+            
             <Route path="/*" element={
               <ProtectedRoute>
                 <MainLayout />
@@ -83,9 +70,20 @@ function App() {
   );
 }
 
-// Main layout with sidebar and header
+// NEW: Password change guard component
+function PasswordChangeGuard({ children }) {
+  const { user } = useAuth();
+  
+  if (user?.force_password_change) {
+    return <Navigate to="/change-password" replace />;
+  }
+  
+  return children;
+}
+
 function MainLayout() {
   const { connected, lastUpdate } = useEFIOWebSocket();
+  const { user } = useAuth();  // NEW: Access user to check password status
 
   return (
     <Box sx={{ display: 'flex' }}>
@@ -104,40 +102,49 @@ function MainLayout() {
         <Header connected={connected} title="EdgeForce-1000 Dashboard" lastUpdate={lastUpdate} />
         <Toolbar />
         
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/io" element={<IOStatus />} />
-          <Route path="/metrics" element={<Metrics />} />
-          <Route path="/diagnostic" element={<Diagnostic />} />
-          <Route path="/modbus" element={<ModbusManager />} />
-          <Route path="/modbus-mqtt-bridge" element={<ModbusMQTTBridge />} />
-
-           {/* ADD THIS ROUTE HERE: */}
-          <Route path="/backup" element={
-           <ProtectedRoute requiredRole="admin">
-            <BackupRestore />
-           </ProtectedRoute>
-           } />  {/* ← NEW */}
-          
-          {/* Configuration routes */}
-          <Route path="/config/network" element={
-            <ProtectedRoute requiredRole="admin">
-              <NetworkSettings />
-            </ProtectedRoute>
-          } />
-
-          {/* ADD THIS ROUTE: */}
-        <Route path="/config/mqtt" element={
-          <ProtectedRoute requiredRole="admin">
-          <MQTTSettings />
-          </ProtectedRoute>
+        {/* NEW: Show warning if password needs to be changed */}
+        {user?.force_password_change && (
+          <Box sx={{ p: 2 }}>
+            <Alert severity="error">
+              <strong>Action Required:</strong> You are using a default password. 
+              You will be redirected to change it.
+            </Alert>
+          </Box>
+        )}
+        
+        {/* NEW: Wrap routes in PasswordChangeGuard */}
+        <PasswordChangeGuard>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/io" element={<IOStatus />} />
+            <Route path="/metrics" element={<Metrics />} />
+            <Route path="/diagnostic" element={<Diagnostic />} />
+            <Route path="/modbus" element={<ModbusManager />} />
+            <Route path="/modbus-mqtt-bridge" element={<ModbusMQTTBridge />} />
+            
+            <Route path="/backup" element={
+              <ProtectedRoute requiredRole="admin">
+                <BackupRestore />
+              </ProtectedRoute>
             } />
             
-          <Route path="/config/io" element={<IOConfiguration />} />
-          
-          <Route path="/settings" element={<Settings />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+            <Route path="/config/network" element={
+              <ProtectedRoute requiredRole="admin">
+                <NetworkSettings />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/config/mqtt" element={
+              <ProtectedRoute requiredRole="admin">
+                <MQTTSettings />
+              </ProtectedRoute>
+            } />
+            
+            <Route path="/config/io" element={<IOConfiguration />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </PasswordChangeGuard>
       </Box>
     </Box>
   );

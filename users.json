@@ -1,16 +1,20 @@
 {
   "admin": {
     "username": "admin",
-    "password_hash": "$2b$12$9j2X0ylYV2PSdv5zsuakiOlapCSxHS5vZO6XLB/1BOFUwm0LI7o5e",
+    "password_hash": "$2b$12$dv8cPjqAM8qTFM1MBuDuCuZPwBRKQGU85JMkafmVTG4f0zUliMQxm",
     "role": "admin",
     "email": "admin@edgeforce.local",
-    "full_name": "Administrator"
+    "full_name": "Administrator",
+    "force_password_change": false,
+    "created_at": null
   },
   "operator": {
     "username": "operator",
-    "password_hash": "$2b$12$RrDcyVClLPNeRO4tq4KMpuYZLJRgonehkAuwI4fw99FOD48zKrudu",
+    "password_hash": "$2b$12$nbpc5h0yATKzysREsNZ.tOY/o4OHZ9bC5B9B8B8tahCac/UgzO6Vq",
     "role": "operator",
     "email": "operator@edgeforce.local",
-    "full_name": "Operator User"
+    "full_name": "Operator User",
+    "force_password_change": true,
+    "created_at": null
   }
 }

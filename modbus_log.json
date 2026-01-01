@@ -281,5 +281,12 @@
     "device_id": "dev_1767190169_1",
     "message": "Connected to 'test'",
     "data": null
+  },
+  {
+    "timestamp": "2026-01-01T14:26:43.764094",
+    "type": "connected",
+    "device_id": "dev_1767190169_1",
+    "message": "Connected to 'test'",
+    "data": null
   }
 ]

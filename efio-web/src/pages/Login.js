@@ -1,25 +1,12 @@
-// src/pages/Login.js
-// Login page component
+// src/pages/Login.js - UPDATED: Handle forced password changes
 
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Box,
-  Card,
-  CardContent,
-  TextField,
-  Button,
-  Typography,
-  Alert,
-  CircularProgress,
-  InputAdornment,
-  IconButton
+  Box, Card, CardContent, TextField, Button, Typography, Alert, CircularProgress,
+  InputAdornment, IconButton
 } from '@mui/material';
-import {
-  Visibility,
-  VisibilityOff,
-  Login as LoginIcon
-} from '@mui/icons-material';
+import { Visibility, VisibilityOff, Login as LoginIcon } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function Login() {
@@ -39,7 +26,12 @@ export default function Login() {
     const result = await login(username, password);
 
     if (result.success) {
-      navigate('/');
+      // NEW: Check if password change is forced
+      if (result.force_password_change) {
+        navigate('/change-password');
+      } else {
+        navigate('/');
+      }
     } else {
       setError(result.error || 'Login failed');
     }
@@ -60,20 +52,13 @@ export default function Login() {
     >
       <Card sx={{ maxWidth: 400, width: '100%' }}>
         <CardContent sx={{ p: 4 }}>
-          {/* Logo and Title */}
           <Box sx={{ textAlign: 'center', mb: 3 }}>
             <Box
               sx={{
-                width: 64,
-                height: 64,
-                borderRadius: 2,
+                width: 64, height: 64, borderRadius: 2,
                 background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: 'white',
-                fontWeight: 'bold',
-                fontSize: 24,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'white', fontWeight: 'bold', fontSize: 24,
                 margin: '0 auto 16px'
               }}
             >
@@ -87,14 +72,12 @@ export default function Login() {
             </Typography>
           </Box>
 
-          {/* Error Alert */}
           {error && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {error}
             </Alert>
           )}
 
-          {/* Login Form */}
           <form onSubmit={handleSubmit}>
             <TextField
               fullWidth
@@ -143,25 +126,24 @@ export default function Login() {
             </Button>
           </form>
 
-          {/* Default Credentials Info */}
+          {/* UPDATED: Add security warning for default passwords */}
           <Box
             sx={{
-              mt: 3,
-              p: 2,
-              bgcolor: 'info.light',
-              borderRadius: 1,
-              border: '1px solid',
-              borderColor: 'info.main'
+              mt: 3, p: 2, bgcolor: 'warning.light', borderRadius: 1,
+              border: '1px solid', borderColor: 'warning.main'
             }}
           >
             <Typography variant="caption" display="block" gutterBottom fontWeight="bold">
-              Default Credentials:
+              ⚠️ Default Credentials (Change Immediately):
             </Typography>
             <Typography variant="caption" display="block">
               Admin: admin / admin123
             </Typography>
             <Typography variant="caption" display="block">
               Operator: operator / operator123
+            </Typography>
+            <Typography variant="caption" display="block" sx={{ mt: 1, color: 'error.main' }}>
+              You will be forced to change the password on first login.
             </Typography>
           </Box>
         </CardContent>
