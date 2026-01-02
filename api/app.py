@@ -15,7 +15,7 @@ import json
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+from config import Config
 from efio_daemon.daemon import EFIODeviceDaemon
 from efio_daemon.state import state
 from utils.pairing import create_pairing, validate_pairing
@@ -34,23 +34,21 @@ from api.mqtt_config import load_mqtt_config
 # Initialize Flask app
 # ============================================
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'edgeforce-secret-key-change-in-production'
-app.config['JWT_SECRET_KEY'] = 'jwt-secret-key-change-in-production'  # Change this!
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = 28800  # 8 hours
-app.config['JWT_REFRESH_TOKEN_EXPIRES'] = 2592000  # 30 days
+app.config['SECRET_KEY'] = Config.SECRET_KEY
+app.config['JWT_SECRET_KEY'] = Config.JWT_SECRET_KEY  # Change this!
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = Config.JWT_ACCESS_TOKEN_EXPIRES # 8 hours
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = Config.JWT_REFRESH_TOKEN_EXPIRES  # 30 days
 
-# Enable CORS for all routes
-# Allow only your specific frontend origins
-ALLOWED_ORIGINS = [
-    "http://localhost:3000",           # Development
-    "http://192.168.5.103:3000",       # Dev on device
-    "http://192.168.5.103:5000",       # Production (served by Flask)
-    "http://192.168.100.1:5000",       # LAN interface
-]
+# ============================================
+# Enable CORS with Dynamic Origins
+# ============================================
+print(f"🌐 CORS: Allowing origins from config ({len(Config.CORS_ORIGINS)} total)")
+for origin in Config.CORS_ORIGINS[:5]:  # Show first 5
+    print(f"   - {origin}")
 
 CORS(app, resources={
     r"/*": {
-        "origins": ALLOWED_ORIGINS,
+        "origins": Config.CORS_ORIGINS,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "supports_credentials": True
@@ -65,19 +63,17 @@ jwt = JWTManager(app)
 # Initialize SocketIO with CORS
 socketio = SocketIO(
     app, 
-    cors_allowed_origins="*",
+    cors_allowed_origins="*",  # Or use Config.CORS_ORIGINS
     async_mode='threading',
-    logger=True,
-    engineio_logger=True,
+    logger=Config.FLASK_DEBUG,
+    engineio_logger=Config.FLASK_DEBUG,
     ping_timeout=60,
     ping_interval=25
 )
 
-# Initialize daemon with debug mode (set to True to see all MQTT publishes)
-DEBUG_MQTT = False  # Set to True for verbose MQTT logging
-daemon = EFIODeviceDaemon(debug_mqtt=DEBUG_MQTT)
+daemon = EFIODeviceDaemon(debug_mqtt=Config.DEBUG_MQTT)
 daemon.start()
-app.daemon = daemon 
+app.daemon = daemon
 
 # Register blueprints
 app.register_blueprint(modbus_api)
@@ -89,11 +85,12 @@ app.register_blueprint(backup_api)
 app.register_blueprint(mqtt_config_api)
 app.register_blueprint(modbus_mqtt_api)
 
-print("=" * 50)
+print("=" * 60)
 print("EFIO API Server Starting...")
-print("Flask-SocketIO initialized")
-print("CORS enabled for all origins")
-print("=" * 50)
+print(f"API Base URL: {Config.API_BASE_URL}")
+print(f"Local IP: {Config.LOCAL_IP}")
+print(f"Debug Mode: {Config.FLASK_DEBUG}")
+print("=" * 60)
 
 # ============================================
 # MQTT Integration
@@ -349,7 +346,9 @@ def status():
         "message": "EFIO API online",
         "version": "1.0.0",
         "websocket": "enabled",
-        "mqtt": mqtt_status
+        "mqtt": mqtt_status,
+        "api_url": Config.API_BASE_URL,
+        "local_ip": Config.LOCAL_IP
     })
 
 @app.get("/api/io")
@@ -710,14 +709,14 @@ def start_background_thread():
 # ============================================
 
 if __name__ == '__main__':
-    print("\n" + "=" * 50)
-    print("🚀 EFIO API Server with WebSocket + MQTT")
-    print("=" * 50)
-    print(f"📡 HTTP API: http://0.0.0.0:5000")
-    print(f"🔌 WebSocket: ws://0.0.0.0:5000")
-    print("MQTT Config API registered")
-    print(f"🌐 CORS: Enabled for all origins")
-    print("=" * 50 + "\n")
+    print("\n" + "=" * 60)
+    print("🚀 EFIO API Server with Dynamic Configuration")
+    print("=" * 60)
+    print(f"📡 HTTP API: http://{Config.FLASK_HOST}:{Config.FLASK_PORT}")
+    print(f"🔌 WebSocket: ws://{Config.FLASK_HOST}:{Config.FLASK_PORT}")
+    print(f"🌐 Access URL: {Config.API_BASE_URL}")
+    print(f"🔧 Debug Mode: {Config.FLASK_DEBUG}")
+    print("=" * 60 + "\n")
     
     # Initialize MQTT
     mqtt_initialized = init_mqtt()
@@ -744,9 +743,9 @@ if __name__ == '__main__':
     # Run with SocketIO
     socketio.run(
         app, 
-        host='0.0.0.0', 
-        port=5000, 
-        debug=True,
-        use_reloader=False,
+        host=Config.FLASK_HOST, 
+        port=Config.FLASK_PORT, 
+        debug=Config.FLASK_DEBUG,
+        use_reloader=Config.RELOAD_ON_CHANGE,
         allow_unsafe_werkzeug=True
     )

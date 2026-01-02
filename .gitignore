@@ -18,3 +18,49 @@ users.json
 pairing.json
 modbus_logs.json
 modbus_devices.json
+
+# -------------------------
+# Additional common ignores
+# -------------------------
+
+# Python
+*.py[cod]
+*$py.class
+pip-wheel-metadata/
+htmlcov/
+.tox/
+.coverage
+.cache/
+.python-version
+
+# Environment files (sensitive)
+.env
+.env.*
+
+# Virtual environments
+venv/
+.venv/
+
+# Build / distribution
+build/
+dist/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+efio-web/build/
+
+# Logs
+logs/
+*.log
+
+# IDEs
+.vscode/
+.idea/
+
+# Databases
+*.sqlite3
+
+# Misc
+.DS_Store
+Thumbs.db

@@ -2,6 +2,7 @@
 // Diagnostic page to test connection and display logs
 
 import React, { useState, useEffect } from 'react';
+import apiConfig from '../config/apiConfig';
 import {
   Box,
   Typography,
@@ -34,7 +35,7 @@ export default function Diagnostic() {
 
   useEffect(() => {
     // Test REST API
-    fetch('http://192.168.5.103:5000/api/status')
+    fetch(`${apiConfig.baseUrl}/api/status`)
       .then(res => res.json())
       .then(data => {
         setRestApiStatus('✅ Connected');
@@ -48,7 +49,7 @@ export default function Diagnostic() {
 
   const testRestIO = () => {
     addLog('Testing REST API /api/io...', 'info');
-    fetch('http://192.168.5.103:5000/api/io')
+    fetch(`${apiConfig.baseUrl}/api/io`)
       .then(res => res.json())
       .then(data => {
         addLog(`REST I/O: ${JSON.stringify(data)}`, 'success');
@@ -60,7 +61,7 @@ export default function Diagnostic() {
 
   const testRestSystem = () => {
     addLog('Testing REST API /api/system...', 'info');
-    fetch('http://192.168.5.103:5000/api/system')
+    fetch(`${apiConfig.baseUrl}/api/system`)
       .then(res => res.json())
       .then(data => {
         addLog(`REST System: ${JSON.stringify(data)}`, 'success');

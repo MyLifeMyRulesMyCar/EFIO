@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "poll_interval": 1.0,
   "mappings": [
     {

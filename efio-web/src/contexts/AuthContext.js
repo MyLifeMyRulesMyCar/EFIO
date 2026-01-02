@@ -3,6 +3,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { jwtDecode } from 'jwt-decode';
+import apiConfig from '../config/apiConfig';
 
 const AuthContext = createContext(null);
 
@@ -60,7 +61,7 @@ export const AuthProvider = ({ children }) => {
     console.log('🔐 Attempting login for:', username);
     
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/auth/login', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -119,7 +120,7 @@ export const AuthProvider = ({ children }) => {
     }
 
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/auth/refresh', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/auth/refresh`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${refresh}`,

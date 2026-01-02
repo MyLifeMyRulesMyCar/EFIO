@@ -7,6 +7,7 @@ import {
 } from '@mui/material';
 import { Backup, Restore, Download } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import apiConfig from '../config/apiConfig';
 
 export default function BackupRestore() {
   const { getAuthHeader } = useAuth();
@@ -18,7 +19,7 @@ export default function BackupRestore() {
 
   const loadBackups = useCallback(async () => {
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/backup/list', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/backup/list`, {
         headers: getAuthHeader()
       });
       if (response.ok) {
@@ -40,7 +41,7 @@ export default function BackupRestore() {
     setCreating(true);
     setMessage(null);
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/backup/create', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/backup/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
         body: JSON.stringify({ include_logs: true })
@@ -61,7 +62,7 @@ export default function BackupRestore() {
 
   const handleRestore = async (backup) => {
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/backup/restore', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/backup/restore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
         body: JSON.stringify({ filename: backup.filename })
@@ -83,7 +84,7 @@ export default function BackupRestore() {
   const handleDownload = async (backup) => {
     try {
       const response = await fetch(
-        `http://192.168.5.103:5000/api/backup/download?filename=${backup.filename}`,
+        `${apiConfig.baseUrl}/api/backup/download?filename=${backup.filename}`,
         {
           headers: getAuthHeader()
         }

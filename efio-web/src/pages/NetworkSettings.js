@@ -19,6 +19,7 @@ import {
 } from '@mui/material';
 import { Save, Refresh, CheckCircle } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import apiConfig from '../config/apiConfig';
 
 export default function NetworkSettings() {
   const { getAuthHeader, hasRole } = useAuth();
@@ -56,7 +57,7 @@ export default function NetworkSettings() {
 
   const checkEthernetPorts = async () => {
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/config/system', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/config/system`, {
         headers: getAuthHeader()
       });
       
@@ -80,7 +81,7 @@ export default function NetworkSettings() {
 
   const loadConfig = async () => {
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/config/network', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/config/network`, {
         headers: getAuthHeader()
       });
       
@@ -106,7 +107,7 @@ export default function NetworkSettings() {
     setMessage(null);
 
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/config/network', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/config/network`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

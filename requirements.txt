@@ -53,6 +53,9 @@ psutil==5.9.6
 bcrypt==4.1.2
 PyJWT==2.8.0
 
+# Environment variable loader
+python-dotenv==1.0.0
+
 # ============================================
 # Network Interface Detection
 # ============================================

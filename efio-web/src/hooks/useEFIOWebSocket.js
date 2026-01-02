@@ -1,8 +1,9 @@
-// src/hooks/useEFIOWebSocket.js
-// Fixed WebSocket hook with better error handling and fallback
+// efio-web/src/hooks/useEFIOWebSocket.js
+// Updated with dynamic URL detection
 
 import { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
+import apiConfig from '../config/apiConfig';
 
 export default function useEFIOWebSocket() {
   const [connected, setConnected] = useState(false);
@@ -21,33 +22,21 @@ export default function useEFIOWebSocket() {
   const reconnectAttempts = useRef(0);
 
   useEffect(() => {
-    console.log('🔌 Initializing WebSocket connection to http://192.168.5.103:5000');
+    const socketUrl = apiConfig.baseUrl; // Use dynamic URL
+    console.log(`🔌 Initializing WebSocket connection to ${socketUrl}`);
     
-    // Create socket with better configuration
-    const newSocket = io('http://192.168.5.103:5000', {
-      // Try WebSocket first, then polling
+    // Create socket with dynamic URL
+    const newSocket = io(socketUrl, {
       transports: ['polling', 'websocket'],
-      
-      // Connection options
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
       reconnectionAttempts: Infinity,
-      
-      // Timeout options
       timeout: 20000,
-      
-      // Force new connection
       forceNew: true,
-      
-      // Additional options for better compatibility
       upgrade: true,
       rememberUpgrade: true,
-      
-      // Enable auto-connect
       autoConnect: true,
-      
-      // Query parameters for debugging
       query: {
         client: 'efio-web',
         timestamp: Date.now()
@@ -155,40 +144,22 @@ export default function useEFIOWebSocket() {
 
   // Function to toggle digital output
   const toggleDO = (channel, state) => {
-    if (!socket) {
-      console.error('❌ Cannot toggle DO: Socket not initialized');
-      return;
-    }
-    
-    if (!connected) {
-      console.error('❌ Cannot toggle DO: WebSocket not connected');
+    if (!socket || !connected) {
       alert('Not connected to controller. Please wait for connection.');
       return;
     }
     
     const value = state ? 1 : 0;
-    console.log(`⚡ Setting DO${channel} to ${state ? 'ON' : 'OFF'} (value: ${value})`);
+    console.log(`⚡ Setting DO${channel} to ${state ? 'ON' : 'OFF'}`);
     
-    socket.emit('set_do', { 
-      channel: channel, 
-      value: value 
-    });
+    socket.emit('set_do', { channel, value });
     
-    // Also update via REST API as fallback
-    fetch(`http://192.168.5.103:5000/api/io/do/${channel}`, {
+    // REST API fallback with dynamic URL
+    fetch(`${apiConfig.baseUrl}/api/io/do/${channel}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ state: state }),
-    })
-    .then(response => response.json())
-    .then(data => {
-      console.log('✅ REST API fallback confirmed:', data);
-    })
-    .catch(error => {
-      console.error('❌ REST API fallback failed:', error);
-    });
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state }),
+    }).catch(error => console.error('❌ REST API fallback failed:', error));
   };
 
   return {
@@ -197,6 +168,7 @@ export default function useEFIOWebSocket() {
     systemData,
     toggleDO,
     lastUpdate,
-    socket // Expose socket for debugging
+    socket,
+    apiUrl: apiConfig.baseUrl // Expose for debugging
   };
 }

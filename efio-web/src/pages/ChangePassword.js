@@ -9,6 +9,7 @@ import {
 } from '@mui/material';
 import { Visibility, VisibilityOff, Lock } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import apiConfig from '../config/apiConfig';
 
 export default function ChangePassword({ forced = false }) {
   const [currentPassword, setCurrentPassword] = useState('');
@@ -61,7 +62,7 @@ export default function ChangePassword({ forced = false }) {
     setLoading(true);
 
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/auth/change-password', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/auth/change-password`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

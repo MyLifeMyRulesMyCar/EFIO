@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import { Save, Refresh, CheckCircle, Cancel, BugReport } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import apiConfig from '../config/apiConfig';
 
 export default function MQTTSettings() {
   const { getAuthHeader, hasRole } = useAuth();
@@ -33,7 +34,7 @@ export default function MQTTSettings() {
 
   const loadConfig = async () => {
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/config/mqtt', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/config/mqtt`, {
         headers: getAuthHeader()
       });
       
@@ -60,7 +61,7 @@ const handleSave = async () => {
 
   try {
     // Step 1: Save configuration
-    const response = await fetch('http://192.168.5.103:5000/api/config/mqtt', {
+    const response = await fetch(`${apiConfig.baseUrl}/api/config/mqtt`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -79,7 +80,7 @@ const handleSave = async () => {
       
       // Step 2: Reload MQTT without restart
       try {
-        const reloadResponse = await fetch('http://192.168.5.103:5000/api/config/mqtt/reload', {
+        const reloadResponse = await fetch(`${apiConfig.baseUrl}/api/config/mqtt/reload`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -124,7 +125,7 @@ const handleSave = async () => {
     setMessage(null);
 
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/config/mqtt/test', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/config/mqtt/test`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

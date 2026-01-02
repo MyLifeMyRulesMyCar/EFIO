@@ -15,6 +15,7 @@ import {
   PlayArrow, Stop, Search, ReadMore, Create, BugReport
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import apiConfig from '../config/apiConfig';
 
 export default function ModbusManager() {
   const { getAuthHeader } = useAuth();
@@ -55,7 +56,7 @@ export default function ModbusManager() {
 
   const loadPorts = async () => {
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/modbus/ports', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/modbus/ports`, {
         headers: getAuthHeader()
       });
       if (response.ok) {
@@ -69,7 +70,7 @@ export default function ModbusManager() {
 
   const loadDevices = async () => {
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/modbus/devices', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/modbus/devices`, {
         headers: getAuthHeader()
       });
       if (response.ok) {
@@ -85,7 +86,7 @@ export default function ModbusManager() {
 
   const loadLogs = async () => {
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/modbus/logs', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/modbus/logs`, {
         headers: getAuthHeader()
       });
       if (response.ok) {
@@ -100,8 +101,8 @@ export default function ModbusManager() {
   const handleSaveDevice = async () => {
     try {
       const url = selectedDevice
-        ? `http://192.168.5.103:5000/api/modbus/devices/${selectedDevice.id}`
-        : 'http://192.168.5.103:5000/api/modbus/devices';
+        ? `${apiConfig.baseUrl}/api/modbus/devices/${selectedDevice.id}`
+        : `${apiConfig.baseUrl}/api/modbus/devices`;
       
       const response = await fetch(url, {
         method: selectedDevice ? 'PUT' : 'POST',
@@ -125,7 +126,7 @@ export default function ModbusManager() {
   const handleDeleteDevice = async (deviceId) => {
     if (!window.confirm('Delete this device?')) return;
     try {
-      const response = await fetch(`http://192.168.5.103:5000/api/modbus/devices/${deviceId}`, {
+      const response = await fetch(`${apiConfig.baseUrl}/api/modbus/devices/${deviceId}`, {
         method: 'DELETE',
         headers: getAuthHeader()
       });
@@ -140,7 +141,7 @@ export default function ModbusManager() {
 
   const handleConnect = async (deviceId) => {
     try {
-      const response = await fetch(`http://192.168.5.103:5000/api/modbus/devices/${deviceId}/connect`, {
+      const response = await fetch(`${apiConfig.baseUrl}/api/modbus/devices/${deviceId}/connect`, {
         method: 'POST',
         headers: getAuthHeader()
       });
@@ -159,7 +160,7 @@ export default function ModbusManager() {
 
   const handleDisconnect = async (deviceId) => {
     try {
-      const response = await fetch(`http://192.168.5.103:5000/api/modbus/devices/${deviceId}/disconnect`, {
+      const response = await fetch(`${apiConfig.baseUrl}/api/modbus/devices/${deviceId}/disconnect`, {
         method: 'POST',
         headers: getAuthHeader()
       });
@@ -176,7 +177,7 @@ export default function ModbusManager() {
     setScanning(true);
     setScanResults([]);
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/modbus/scan', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/modbus/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
         body: JSON.stringify(scanForm)
@@ -201,7 +202,7 @@ export default function ModbusManager() {
       return;
     }
     try {
-      const response = await fetch(`http://192.168.5.103:5000/api/modbus/devices/${selectedDevice.id}/read`, {
+      const response = await fetch(`${apiConfig.baseUrl}/api/modbus/devices/${selectedDevice.id}/read`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
         body: JSON.stringify(testForm)
@@ -225,7 +226,7 @@ export default function ModbusManager() {
       return;
     }
     try {
-      const response = await fetch(`http://192.168.5.103:5000/api/modbus/devices/${selectedDevice.id}/write`, {
+      const response = await fetch(`${apiConfig.baseUrl}/api/modbus/devices/${selectedDevice.id}/write`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
         body: JSON.stringify(testForm)

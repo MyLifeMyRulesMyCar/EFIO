@@ -23,6 +23,7 @@ import {
 } from '@mui/material';
 import { Save, Refresh } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
+import apiConfig from '../config/apiConfig';
 
 export default function IOConfiguration() {
   const { getAuthHeader } = useAuth();
@@ -50,7 +51,7 @@ export default function IOConfiguration() {
 
   const loadConfig = async () => {
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/config/io', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/config/io`, {
         headers: getAuthHeader()
       });
       
@@ -71,7 +72,7 @@ export default function IOConfiguration() {
     setMessage(null);
 
     try {
-      const response = await fetch('http://192.168.5.103:5000/api/config/io', {
+      const response = await fetch(`${apiConfig.baseUrl}/api/config/io`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

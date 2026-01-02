@@ -288,5 +288,38 @@
     "device_id": "dev_1767190169_1",
     "message": "Connected to 'test'",
     "data": null
+  },
+  {
+    "timestamp": "2026-01-02T03:26:35.475465",
+    "type": "connected",
+    "device_id": "dev_1767190169_1",
+    "message": "Connected to 'test'",
+    "data": null
+  },
+  {
+    "timestamp": "2026-01-02T03:29:10.613347",
+    "type": "read_error",
+    "device_id": "dev_1767190169_1",
+    "message": "Read failed: No communication with the instrument (no answer)",
+    "data": null
+  },
+  {
+    "timestamp": "2026-01-02T03:29:49.969840",
+    "type": "device_updated",
+    "device_id": "dev_1767190169_1",
+    "message": "Device 'test' updated",
+    "data": null
+  },
+  {
+    "timestamp": "2026-01-02T03:29:55.152184",
+    "type": "read",
+    "device_id": "dev_1767190169_1",
+    "message": "Read FC3 from 0, count=1",
+    "data": [
+      {
+        "register": 0,
+        "value": 12
+      }
+    ]
   }
 ]
