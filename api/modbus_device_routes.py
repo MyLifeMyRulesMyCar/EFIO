@@ -10,6 +10,7 @@ import minimalmodbus
 import serial
 import time
 import threading
+from efio_daemon.resilience import CircuitBreaker, retry_with_backoff, health_status
 
 modbus_device_api = Blueprint('modbus_device_api', __name__)
 
@@ -43,35 +44,48 @@ liveness_failures = {}
 LIVENESS_INTERVAL = 5  # seconds between liveness checks
 LIVENESS_MAX_FAILURES = 3
 
-# Simple in-memory circuit breakers per device
+# Circuit breakers per device using resilience.CircuitBreaker
 circuit_breakers = {}
-# Circuit breaker settings
-CB_MAX_FAILURES = 3
-CB_COOLDOWN_SECONDS = 30
 
-def cb_is_open(device_id):
-    entry = circuit_breakers.get(device_id)
-    if not entry:
-        return False
-    if entry.get('state') == 'open':
-        if time.time() >= entry.get('open_until', 0):
-            # move to half-open
-            entry['state'] = 'half-open'
-            entry['failures'] = 0
-            return False
-        return True
-    return False
+def get_breaker(device_id, name=None, failure_threshold=3, timeout=30):
+    if device_id in circuit_breakers:
+        return circuit_breakers[device_id]
 
-def cb_record_success(device_id):
-    circuit_breakers.pop(device_id, None)
+    # Check device-specific settings from stored config
+    try:
+        devices = load_devices()
+        dev = next((d for d in devices if d.get('id') == device_id), None)
+        if dev:
+            failure_threshold = int(dev.get('cb_failure_threshold', failure_threshold))
+            timeout = int(dev.get('cb_timeout_seconds', timeout))
+    except Exception:
+        # ignore and use defaults
+        pass
 
-def cb_record_failure(device_id):
-    entry = circuit_breakers.setdefault(device_id, {'failures': 0, 'state': 'closed'})
-    entry['failures'] = entry.get('failures', 0) + 1
-    if entry['failures'] >= CB_MAX_FAILURES:
-        entry['state'] = 'open'
-        entry['open_until'] = time.time() + CB_COOLDOWN_SECONDS
-        log_modbus_event('circuit_open', device_id, f'Circuit opened after {entry["failures"]} failures')
+    cb = CircuitBreaker(failure_threshold=failure_threshold, timeout=timeout, expected_exception=Exception, name=name or f"modbus-{device_id}")
+    circuit_breakers[device_id] = cb
+    return cb
+
+
+def classify_error(exc):
+    """Return a short classification for common Modbus/serial errors."""
+    try:
+        nr = getattr(minimalmodbus, 'NoResponseError', None)
+        ir = getattr(minimalmodbus, 'InvalidResponseError', None)
+        if nr and isinstance(exc, nr):
+            return 'NoResponse'
+        if ir and isinstance(exc, ir):
+            return 'InvalidResponse'
+    except Exception:
+        pass
+
+    try:
+        if isinstance(exc, serial.SerialException):
+            return 'SerialError'
+    except Exception:
+        pass
+
+    return exc.__class__.__name__
 
 
 def cleanup_connection(device_id, reason=None):
@@ -115,6 +129,11 @@ def cleanup_connection(device_id, reason=None):
             save_devices(devices)
 
         log_modbus_event('hardware_disconnected', device_id, f'Hardware disconnected: {reason}')
+        # update health status
+        try:
+            health_status.update('modbus', 'degraded', f'Device {device_id} disconnected: {reason}', details={'device_id': device_id})
+        except Exception:
+            pass
     except Exception as e:
         print(f"cleanup_connection error: {e}")
 
@@ -257,6 +276,9 @@ def create_device():
         "polling_enabled": data.get('polling_enabled', False),
         "polling_interval": int(data.get('polling_interval', 1000)),
         "enabled": data.get('enabled', True),
+        # Optional circuit breaker configuration per-device
+        "cb_failure_threshold": int(data.get('cb_failure_threshold')) if data.get('cb_failure_threshold') is not None else None,
+        "cb_timeout_seconds": int(data.get('cb_timeout_seconds')) if data.get('cb_timeout_seconds') is not None else None,
         "created_at": datetime.now().isoformat(),
         "last_connected": None
     }
@@ -294,7 +316,10 @@ def update_device(device_id):
         "registers": data.get('registers', device.get('registers', [])),
         "polling_enabled": data.get('polling_enabled', device.get('polling_enabled', False)),
         "polling_interval": int(data.get('polling_interval', device.get('polling_interval', 1000))),
-        "enabled": data.get('enabled', device.get('enabled', True))
+        "enabled": data.get('enabled', device.get('enabled', True)),
+        # Allow updating per-device circuit breaker settings
+        "cb_failure_threshold": int(data.get('cb_failure_threshold')) if data.get('cb_failure_threshold') is not None else device.get('cb_failure_threshold'),
+        "cb_timeout_seconds": int(data.get('cb_timeout_seconds')) if data.get('cb_timeout_seconds') is not None else device.get('cb_timeout_seconds')
     })
     
     devices[device_index] = device
@@ -347,47 +372,60 @@ def connect_device(device_id):
     if not device:
         return jsonify({"error": "Device not found"}), 404
     
-    if cb_is_open(device_id):
+    breaker = get_breaker(device_id, name=device.get('name'))
+    if breaker.get_state().get('state') == 'open':
         return jsonify({"error": "Device circuit open due to repeated failures"}), 503
 
-    try:
-        instrument = create_modbus_connection(
+    @retry_with_backoff(max_retries=2, initial_delay=1, expected_exception=Exception)
+    def _attempt_connect():
+        inst = create_modbus_connection(
             device['port'],
             device['slave_id'],
             device['baudrate'],
             device['parity'],
             device['stopbits']
         )
-        
-        if instrument:
-            active_connections[device_id] = instrument
-            
-            # Update last connected time
-            device['last_connected'] = datetime.now().isoformat()
-            device_index = next(i for i, d in enumerate(devices) if d['id'] == device_id)
-            devices[device_index] = device
-            save_devices(devices)
-            
-            log_modbus_event("connected", device_id, f"Connected to '{device['name']}'")
-            
-            cb_record_success(device_id)
-            # start proactive liveness checks
-            try:
-                start_liveness_check(device_id)
-            except Exception:
-                pass
-            return jsonify({
-                "message": "Connected successfully",
-                "device_id": device_id
-            }), 200
-        else:
-            cb_record_failure(device_id)
-            return jsonify({"error": "Failed to create connection"}), 500
-            
+        if not inst:
+            raise RuntimeError('Failed to create connection')
+        return inst
+
+    try:
+        # run under circuit breaker so failures are tracked
+        instrument = breaker.call(_attempt_connect)()
+
+        active_connections[device_id] = instrument
+
+        # Update last connected time
+        device['last_connected'] = datetime.now().isoformat()
+        device_index = next(i for i, d in enumerate(devices) if d['id'] == device_id)
+        devices[device_index] = device
+        save_devices(devices)
+
+        log_modbus_event("connected", device_id, f"Connected to '{device['name']}'")
+        # start proactive liveness checks
+        try:
+            start_liveness_check(device_id)
+        except Exception:
+            pass
+
+        # mark healthy
+        try:
+            health_status.update('modbus', 'healthy', f'Device {device_id} connected', details={'device_id': device_id})
+        except Exception:
+            pass
+
+        return jsonify({
+            "message": "Connected successfully",
+            "device_id": device_id
+        }), 200
     except Exception as e:
-        cb_record_failure(device_id)
-        log_modbus_event("connection_error", device_id, f"Connection failed: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        err_type = classify_error(e)
+        log_modbus_event("connection_error", device_id, f"Connection failed: {str(e)}", {"type": err_type})
+        try:
+            health_status.update('modbus', 'degraded', f'Connection failed for {device_id}: {str(e)}', details={'device_id': device_id, 'error_type': err_type})
+        except Exception:
+            pass
+        return jsonify({"error": str(e), "type": err_type}), 500
 
 @modbus_device_api.route('/api/modbus/devices/<device_id>/disconnect', methods=['POST'])
 @jwt_required()
@@ -429,54 +467,61 @@ def read_registers(device_id):
     count = int(data.get('count', 1))
     function_code = int(data.get('function_code', 3))
     
-    if cb_is_open(device_id):
+    breaker = get_breaker(device_id, name=device.get('name'))
+    if breaker.get_state().get('state') == 'open':
         return jsonify({"error": "Device circuit open due to repeated failures"}), 503
 
     if device_id not in active_connections:
         return jsonify({"error": "Device not connected"}), 400
-    
-    instrument = active_connections[device_id]
-    
-    try:
+
+    def _do_read():
+        instr = active_connections[device_id]
         results = []
-        
+
         if function_code == 1:  # Read Coils
             for i in range(count):
-                value = instrument.read_bit(register + i, functioncode=1)
+                value = instr.read_bit(register + i, functioncode=1)
                 results.append({"register": register + i, "value": int(value)})
-                
+
         elif function_code == 2:  # Read Discrete Inputs
             for i in range(count):
-                value = instrument.read_bit(register + i, functioncode=2)
+                value = instr.read_bit(register + i, functioncode=2)
                 results.append({"register": register + i, "value": int(value)})
-                
+
         elif function_code == 3:  # Read Holding Registers
             for i in range(count):
-                value = instrument.read_register(register + i, functioncode=3)
+                value = instr.read_register(register + i, functioncode=3)
                 results.append({"register": register + i, "value": value})
-                
+
         elif function_code == 4:  # Read Input Registers
             for i in range(count):
-                value = instrument.read_register(register + i, functioncode=4)
+                value = instr.read_register(register + i, functioncode=4)
                 results.append({"register": register + i, "value": value})
-        
-        log_modbus_event("read", device_id, f"Read FC{function_code} from {register}, count={count}", results)
 
-        cb_record_success(device_id)
-        return jsonify({
-            "success": True,
-            "registers": results
-        }), 200
-        
+        log_modbus_event("read", device_id, f"Read FC{function_code} from {register}, count={count}", results)
+        return results
+
+    try:
+        results = breaker.call(_do_read)()
+        # on success mark healthy
+        try:
+            health_status.update('modbus', 'healthy', f'Device {device_id} read OK', details={'device_id': device_id})
+        except Exception:
+            pass
+        return jsonify({"success": True, "registers": results}), 200
     except Exception as e:
-        cb_record_failure(device_id)
-        # if hardware error, remove stale connection so UI reflects real state
+        # mark failure and cleanup
         try:
             cleanup_connection(device_id, str(e))
         except Exception:
             pass
-        log_modbus_event("read_error", device_id, f"Read failed: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        err_type = classify_error(e)
+        log_modbus_event("read_error", device_id, f"Read failed: {str(e)}", {"type": err_type})
+        try:
+            health_status.update('modbus', 'degraded', f'Device {device_id} read failed: {str(e)}', details={'device_id': device_id, 'error_type': err_type})
+        except Exception:
+            pass
+        return jsonify({"error": str(e), "type": err_type}), 500
 
 @modbus_device_api.route('/api/modbus/devices/<device_id>/write', methods=['POST'])
 @jwt_required()
@@ -488,7 +533,8 @@ def write_register(device_id):
     value = data.get('value')
     function_code = int(data.get('function_code', 6))
     
-    if cb_is_open(device_id):
+    breaker = get_breaker(device_id, name=device.get('name'))
+    if breaker.get_state().get('state') == 'open':
         return jsonify({"error": "Device circuit open due to repeated failures"}), 503
 
     if device_id not in active_connections:
@@ -510,15 +556,24 @@ def write_register(device_id):
             "register": register,
             "value": value
         }), 200
-        
     except Exception as e:
-        cb_record_failure(device_id)
+        # record failure via breaker and cleanup
+        try:
+            # record a failure on the breaker
+            get_breaker(device_id)._on_failure()
+        except Exception:
+            pass
         try:
             cleanup_connection(device_id, str(e))
         except Exception:
             pass
-        log_modbus_event("write_error", device_id, f"Write failed: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        err_type = classify_error(e)
+        log_modbus_event("write_error", device_id, f"Write failed: {str(e)}", {"type": err_type})
+        try:
+            health_status.update('modbus', 'degraded', f'Device {device_id} write failed: {str(e)}', details={'device_id': device_id, 'error_type': err_type})
+        except Exception:
+            pass
+        return jsonify({"error": str(e), "type": err_type}), 500
 
 # ============================================
 # Auto-Scan Feature
@@ -613,17 +668,30 @@ def poll_device_registers(device_id):
                         "name": reg_config.get('name', f'Register {register}')
                     }
                     # record failure against circuit breaker for this device
-                    cb_record_failure(device_id)
+                    try:
+                        get_breaker(device_id)._on_failure()
+                    except Exception:
+                        pass
 
             # Log the polling snapshot
             log_modbus_event("poll", device_id, f"Polled {len(regs)} registers", results)
 
             # If we reached here without failures, record success
-            cb_record_success(device_id)
+            try:
+                get_breaker(device_id)._on_success()
+            except Exception:
+                # fallback to reset
+                try:
+                    get_breaker(device_id).reset()
+                except Exception:
+                    pass
 
         except Exception as e:
             print(f"Polling error for {device_id}: {e}")
-            cb_record_failure(device_id)
+            try:
+                get_breaker(device_id)._on_failure()
+            except Exception:
+                pass
 
         time.sleep(interval)
 
@@ -645,7 +713,10 @@ def liveness_check_loop(device_id):
                 failures = 0
             except Exception:
                 failures += 1
-                cb_record_failure(device_id)
+                try:
+                    get_breaker(device_id)._on_failure()
+                except Exception:
+                    pass
                 log_modbus_event('liveness_failure', device_id, f'Liveness check failed (count={failures})')
                 if failures >= LIVENESS_MAX_FAILURES:
                     # consider device disconnected
@@ -654,7 +725,10 @@ def liveness_check_loop(device_id):
 
         except Exception as e:
             print(f"Liveness loop error for {device_id}: {e}")
-            cb_record_failure(device_id)
+            try:
+                get_breaker(device_id)._on_failure()
+            except Exception:
+                pass
             try:
                 cleanup_connection(device_id, str(e))
             except Exception:
@@ -739,5 +813,17 @@ def clear_logs():
         if os.path.exists(MODBUS_LOG_FILE):
             os.remove(MODBUS_LOG_FILE)
         return jsonify({"message": "Logs cleared"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@modbus_device_api.route('/api/modbus/devices/<device_id>/circuit/reset', methods=['POST'])
+@jwt_required()
+def reset_device_circuit(device_id):
+    """Manually reset the circuit breaker for a device"""
+    try:
+        b = get_breaker(device_id)
+        b.reset()
+        return jsonify({"message": "circuit reset", "state": b.get_state()}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
