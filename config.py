@@ -184,3 +184,22 @@ class Config:
 
 # Print config on import
 Config.print_config()
+
+# ============================================
+# Resilience Configuration
+# ============================================
+class ResilienceConfig:
+    # Circuit Breaker Settings
+    MQTT_CIRCUIT_BREAKER_THRESHOLD = 5
+    MQTT_CIRCUIT_BREAKER_TIMEOUT = 60
+    
+    MODBUS_CIRCUIT_BREAKER_THRESHOLD = 3
+    MODBUS_CIRCUIT_BREAKER_TIMEOUT = 30
+    
+    # Retry Settings
+    MAX_RETRIES = 3
+    INITIAL_RETRY_DELAY = 1
+    MAX_RETRY_DELAY = 30
+    
+    # Health Check
+    HEALTH_CHECK_INTERVAL = 10  # seconds

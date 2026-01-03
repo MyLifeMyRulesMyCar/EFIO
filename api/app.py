@@ -30,6 +30,7 @@ from api.mqtt_routes import mqtt_config_api
 from api.modbus_mqtt_bridge_routes import modbus_mqtt_api, set_bridge_instance
 from efio_daemon.modbus_mqtt_bridge import ModbusMQTTBridge
 from api.mqtt_config import load_mqtt_config
+from api.health_routes import health_api
 # ============================================
 # Initialize Flask app
 # ============================================
@@ -84,6 +85,7 @@ app.register_blueprint(oled_api)
 app.register_blueprint(backup_api)
 app.register_blueprint(mqtt_config_api)
 app.register_blueprint(modbus_mqtt_api)
+app.register_blueprint(health_api)
 
 print("=" * 60)
 print("EFIO API Server Starting...")
