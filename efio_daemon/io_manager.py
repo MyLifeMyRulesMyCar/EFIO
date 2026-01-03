@@ -25,8 +25,13 @@ class IOManager:
         self.requests_out = {}
 
         if not state["simulation"]:
-            self._setup_inputs()
-            self._setup_outputs()
+            try:
+                self._setup_inputs()
+                self._setup_outputs()
+            except Exception as e:
+                # if GPIO setup fails, fall back to simulation mode and log error
+                print(f"GPIO setup failed, switching to simulation mode: {e}")
+                state["simulation"] = True
 
     # -------- Setup hardware pins --------
     def _setup_inputs(self):
@@ -42,10 +47,14 @@ class IOManager:
                 )
                 for ln in lines
             }
-            req = gpiod.request_lines(
-                chip, consumer="efio_inputs", config=config
-            )
-            self.requests_in[chip] = req
+            try:
+                req = gpiod.request_lines(
+                    chip, consumer="efio_inputs", config=config
+                )
+                self.requests_in[chip] = req
+            except Exception as e:
+                print(f"GPIO input request failed for {chip}: {e}")
+                # continue, other chips may be available
 
     def _setup_outputs(self):
         chips = {}
@@ -60,10 +69,14 @@ class IOManager:
                 )
                 for ln in lines
             }
-            req = gpiod.request_lines(
-                chip, consumer="efio_outputs", config=config
-            )
-            self.requests_out[chip] = req
+            try:
+                req = gpiod.request_lines(
+                    chip, consumer="efio_outputs", config=config
+                )
+                self.requests_out[chip] = req
+            except Exception as e:
+                print(f"GPIO output request failed for {chip}: {e}")
+                # continue, other chips may be available
 
     # -------- Public API ------------
 
@@ -74,9 +87,18 @@ class IOManager:
 
         new_vals = []
         for i, (name, (chip, line)) in enumerate(INPUT_PINS.items()):
-            req = self.requests_in[chip]
-            val = req.get_value(line)
-            new_vals.append(1 if val == Value.ACTIVE else 0)
+            try:
+                req = self.requests_in.get(chip)
+                if not req:
+                    # missing chip request, return default
+                    new_vals.append(0)
+                    continue
+
+                val = req.get_value(line)
+                new_vals.append(1 if val == Value.ACTIVE else 0)
+            except Exception as e:
+                print(f"GPIO read failed for {chip} line {line}: {e}")
+                new_vals.append(0)
 
         return new_vals
 
@@ -88,5 +110,13 @@ class IOManager:
 
         pin_key = f"DO{ch}"
         chip, line = OUTPUT_PINS[pin_key]
-        req = self.requests_out[chip]
-        req.set_value(line, Value.ACTIVE if value else Value.INACTIVE)
+        try:
+            req = self.requests_out.get(chip)
+            if not req:
+                print(f"GPIO write: no request for chip {chip}")
+                return
+            req.set_value(line, Value.ACTIVE if value else Value.INACTIVE)
+        except Exception as e:
+            print(f"GPIO write failed for {chip} line {line}: {e}")
+            # on failure, mark simulation to avoid repeated errors
+            state["simulation"] = True

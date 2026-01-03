@@ -36,6 +36,88 @@ active_connections = {}
 polling_threads = {}
 polling_active = {}
 
+# Liveness check threads (proactive detection of hardware removal)
+liveness_threads = {}
+liveness_active = {}
+liveness_failures = {}
+LIVENESS_INTERVAL = 5  # seconds between liveness checks
+LIVENESS_MAX_FAILURES = 3
+
+# Simple in-memory circuit breakers per device
+circuit_breakers = {}
+# Circuit breaker settings
+CB_MAX_FAILURES = 3
+CB_COOLDOWN_SECONDS = 30
+
+def cb_is_open(device_id):
+    entry = circuit_breakers.get(device_id)
+    if not entry:
+        return False
+    if entry.get('state') == 'open':
+        if time.time() >= entry.get('open_until', 0):
+            # move to half-open
+            entry['state'] = 'half-open'
+            entry['failures'] = 0
+            return False
+        return True
+    return False
+
+def cb_record_success(device_id):
+    circuit_breakers.pop(device_id, None)
+
+def cb_record_failure(device_id):
+    entry = circuit_breakers.setdefault(device_id, {'failures': 0, 'state': 'closed'})
+    entry['failures'] = entry.get('failures', 0) + 1
+    if entry['failures'] >= CB_MAX_FAILURES:
+        entry['state'] = 'open'
+        entry['open_until'] = time.time() + CB_COOLDOWN_SECONDS
+        log_modbus_event('circuit_open', device_id, f'Circuit opened after {entry["failures"]} failures')
+
+
+def cleanup_connection(device_id, reason=None):
+    """Remove in-memory connection and stop polling when hardware is gone."""
+    try:
+        if device_id in active_connections:
+            try:
+                instr = active_connections[device_id]
+                # best-effort: close serial if available
+                try:
+                    if hasattr(instr, 'serial') and instr.serial:
+                        instr.serial.close()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            try:
+                del active_connections[device_id]
+            except KeyError:
+                pass
+
+        # stop polling if running
+        if polling_active.get(device_id, False):
+            try:
+                stop_device_polling(device_id)
+            except Exception:
+                pass
+        # stop liveness checks
+        if liveness_active.get(device_id, False):
+            try:
+                stop_liveness_check(device_id)
+            except Exception:
+                pass
+
+        # update device metadata
+        devices = load_devices()
+        device = next((d for d in devices if d['id'] == device_id), None)
+        if device:
+            device['last_connected'] = None
+            save_devices(devices)
+
+        log_modbus_event('hardware_disconnected', device_id, f'Hardware disconnected: {reason}')
+    except Exception as e:
+        print(f"cleanup_connection error: {e}")
+
 # ============================================
 # Helper Functions
 # ============================================
@@ -265,6 +347,9 @@ def connect_device(device_id):
     if not device:
         return jsonify({"error": "Device not found"}), 404
     
+    if cb_is_open(device_id):
+        return jsonify({"error": "Device circuit open due to repeated failures"}), 503
+
     try:
         instrument = create_modbus_connection(
             device['port'],
@@ -285,14 +370,22 @@ def connect_device(device_id):
             
             log_modbus_event("connected", device_id, f"Connected to '{device['name']}'")
             
+            cb_record_success(device_id)
+            # start proactive liveness checks
+            try:
+                start_liveness_check(device_id)
+            except Exception:
+                pass
             return jsonify({
                 "message": "Connected successfully",
                 "device_id": device_id
             }), 200
         else:
+            cb_record_failure(device_id)
             return jsonify({"error": "Failed to create connection"}), 500
             
     except Exception as e:
+        cb_record_failure(device_id)
         log_modbus_event("connection_error", device_id, f"Connection failed: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
@@ -304,6 +397,12 @@ def disconnect_device(device_id):
         # Stop polling if active
         if polling_active.get(device_id, False):
             stop_device_polling(device_id)
+        # Stop liveness if active
+        if liveness_active.get(device_id, False):
+            try:
+                stop_liveness_check(device_id)
+            except Exception:
+                pass
         
         del active_connections[device_id]
         
@@ -330,6 +429,9 @@ def read_registers(device_id):
     count = int(data.get('count', 1))
     function_code = int(data.get('function_code', 3))
     
+    if cb_is_open(device_id):
+        return jsonify({"error": "Device circuit open due to repeated failures"}), 503
+
     if device_id not in active_connections:
         return jsonify({"error": "Device not connected"}), 400
     
@@ -359,13 +461,20 @@ def read_registers(device_id):
                 results.append({"register": register + i, "value": value})
         
         log_modbus_event("read", device_id, f"Read FC{function_code} from {register}, count={count}", results)
-        
+
+        cb_record_success(device_id)
         return jsonify({
             "success": True,
             "registers": results
         }), 200
         
     except Exception as e:
+        cb_record_failure(device_id)
+        # if hardware error, remove stale connection so UI reflects real state
+        try:
+            cleanup_connection(device_id, str(e))
+        except Exception:
+            pass
         log_modbus_event("read_error", device_id, f"Read failed: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
@@ -379,6 +488,9 @@ def write_register(device_id):
     value = data.get('value')
     function_code = int(data.get('function_code', 6))
     
+    if cb_is_open(device_id):
+        return jsonify({"error": "Device circuit open due to repeated failures"}), 503
+
     if device_id not in active_connections:
         return jsonify({"error": "Device not connected"}), 400
     
@@ -400,6 +512,11 @@ def write_register(device_id):
         }), 200
         
     except Exception as e:
+        cb_record_failure(device_id)
+        try:
+            cleanup_connection(device_id, str(e))
+        except Exception:
+            pass
         log_modbus_event("write_error", device_id, f"Write failed: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
@@ -461,46 +578,105 @@ def poll_device_registers(device_id):
     """Background thread to poll device registers"""
     devices = load_devices()
     device = next((d for d in devices if d['id'] == device_id), None)
-    
-    if not device or device_id not in active_connections:
+
+    if not device:
         return
-    
+
+    if device_id not in active_connections:
+        return
+
     instrument = active_connections[device_id]
     interval = device.get('polling_interval', 1000) / 1000.0  # Convert to seconds
-    
+
     while polling_active.get(device_id, False):
         try:
+            regs = device.get('registers', [])
             results = {}
-            
-            for reg_config in device.get('registers', []):
-                if reg_config.get('poll', True):
-                    register = reg_config['address']
-                    fc = reg_config.get('function_code', 3)
-                    
-                    try:
-                        if fc in [1, 2]:
-                            value = instrument.read_bit(register, functioncode=fc)
-                        else:
-                            value = instrument.read_register(register, functioncode=fc)
-                        
-                        results[register] = {
-                            "value": value,
-                            "name": reg_config.get('name', f'Register {register}'),
-                            "timestamp": datetime.now().isoformat()
-                        }
-                    except Exception as e:
-                        results[register] = {
-                            "error": str(e),
-                            "name": reg_config.get('name', f'Register {register}')
-                        }
-            
-            # Store results (you can publish to MQTT here if needed)
-            # For now, just log periodically
-            
+
+            for reg_config in regs:
+                register = int(reg_config.get('register', 0))
+                fc = int(reg_config.get('function_code', reg_config.get('function', 3)))
+                try:
+                    if fc in (1, 2):
+                        value = instrument.read_bit(register, functioncode=fc)
+                    else:
+                        value = instrument.read_register(register, functioncode=fc)
+
+                    results[register] = {
+                        "value": int(value) if isinstance(value, bool) else value,
+                        "name": reg_config.get('name', f'Register {register}'),
+                        "timestamp": datetime.now().isoformat()
+                    }
+                except Exception as e:
+                    results[register] = {
+                        "error": str(e),
+                        "name": reg_config.get('name', f'Register {register}')
+                    }
+                    # record failure against circuit breaker for this device
+                    cb_record_failure(device_id)
+
+            # Log the polling snapshot
+            log_modbus_event("poll", device_id, f"Polled {len(regs)} registers", results)
+
+            # If we reached here without failures, record success
+            cb_record_success(device_id)
+
         except Exception as e:
             print(f"Polling error for {device_id}: {e}")
-        
+            cb_record_failure(device_id)
+
         time.sleep(interval)
+
+
+def liveness_check_loop(device_id):
+    """Background liveness check to detect hardware disconnects."""
+    interval = LIVENESS_INTERVAL
+    failures = 0
+
+    while liveness_active.get(device_id, False):
+        try:
+            if device_id not in active_connections:
+                break
+
+            instr = active_connections[device_id]
+            # perform a lightweight check: read register 0 (no effect)
+            try:
+                instr.read_register(0, functioncode=3)
+                failures = 0
+            except Exception:
+                failures += 1
+                cb_record_failure(device_id)
+                log_modbus_event('liveness_failure', device_id, f'Liveness check failed (count={failures})')
+                if failures >= LIVENESS_MAX_FAILURES:
+                    # consider device disconnected
+                    cleanup_connection(device_id, 'liveness failures')
+                    break
+
+        except Exception as e:
+            print(f"Liveness loop error for {device_id}: {e}")
+            cb_record_failure(device_id)
+            try:
+                cleanup_connection(device_id, str(e))
+            except Exception:
+                pass
+            break
+
+        time.sleep(interval)
+
+
+def start_liveness_check(device_id):
+    if liveness_active.get(device_id, False):
+        return
+    liveness_active[device_id] = True
+    thread = threading.Thread(target=liveness_check_loop, args=(device_id,), daemon=True)
+    liveness_threads[device_id] = thread
+    thread.start()
+
+
+def stop_liveness_check(device_id):
+    liveness_active[device_id] = False
+    if device_id in liveness_threads:
+        del liveness_threads[device_id]
 
 def start_device_polling(device_id):
     """Start polling thread for device"""
