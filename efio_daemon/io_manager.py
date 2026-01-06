@@ -31,6 +31,10 @@ class IOManager:
         self.requests_in = {}
         self.requests_out = {}
         self._gpio_failure_count = 0
+        # track last seen values and change timestamps per-input for watchdog
+        self._last_input_values = {}
+        self._last_input_change = {}
+        self._input_seen = {}
         self._gpio_lock = threading.RLock()
         self._reinit_thread = None
         self._stop_reinit = False
@@ -107,20 +111,40 @@ class IOManager:
         """Return list of DI values"""
         if state["simulation"]:
             return state["di"]  # real hardware not required
+        # Circuit-breaker protected read with input watchdog
+        GPIO_STUCK_SECONDS = 5
 
-        # Circuit-breaker protected read
         @self.gpio_breaker.call
         def _read():
             new_vals = []
+            now = time.time()
             for i, (name, (chip, line)) in enumerate(INPUT_PINS.items()):
                 try:
                     req = self.requests_in.get(chip)
                     if not req:
+                        # no request object for this chip; treat as 0 but mark seen
                         new_vals.append(0)
+                        if name not in self._input_seen:
+                            self._input_seen[name] = True
+                            self._last_input_change[name] = now
+                            self._last_input_values[name] = 0
                         continue
 
-                    val = req.get_value(line)
-                    new_vals.append(1 if val == Value.ACTIVE else 0)
+                    val_raw = req.get_value(line)
+                    val = 1 if val_raw == Value.ACTIVE else 0
+                    new_vals.append(val)
+
+                    # initialize tracking
+                    if name not in self._input_seen:
+                        self._input_seen[name] = True
+                        self._last_input_values[name] = val
+                        self._last_input_change[name] = now
+                    else:
+                        if self._last_input_values.get(name) != val:
+                            # value changed -> update timestamp
+                            self._last_input_values[name] = val
+                            self._last_input_change[name] = now
+
                 except Exception as e:
                     print(f"GPIO read failed for {chip} line {line}: {e}")
                     # count consecutive failures
@@ -129,6 +153,7 @@ class IOManager:
                         if self._gpio_failure_count >= 5:
                             # degrade to simulation and start reinit attempts
                             print("GPIO: too many read failures, switching to simulation mode")
+                            # preserve last-known DI values in state
                             state["simulation"] = True
                             health_status.update("gpio", "degraded", "Consecutive read failures")
                             self._start_reinit_thread()
@@ -137,6 +162,30 @@ class IOManager:
             # reset failure counter on successful read
             with self._gpio_lock:
                 self._gpio_failure_count = 0
+
+            # Update shared state with last-known values (graceful degradation)
+            try:
+                # keep previous state if we are switching to simulation
+                state["di"] = new_vals
+            except Exception:
+                pass
+
+            # Watchdog: if any input has been inactive (0) with no change for longer than threshold, mark degraded
+            degraded = False
+            degraded_msgs = []
+            for name in INPUT_PINS.keys():
+                last_change = self._last_input_change.get(name)
+                seen = self._input_seen.get(name, False)
+                val = self._last_input_values.get(name, None)
+                if seen and last_change and val == 0:
+                    if now - last_change > GPIO_STUCK_SECONDS:
+                        degraded = True
+                        degraded_msgs.append(f"{name} inactive for {int(now - last_change)}s")
+
+            if degraded:
+                health_status.update("gpio", "degraded", ", ".join(degraded_msgs))
+            else:
+                health_status.update("gpio", "healthy", "I/O operational")
 
             return new_vals
 

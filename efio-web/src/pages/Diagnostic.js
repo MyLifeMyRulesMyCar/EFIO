@@ -1,5 +1,5 @@
 // src/pages/Diagnostic.js
-// Diagnostic page to test connection and display logs
+// UPDATED: Shows component-level health status (GPIO, MQTT, Modbus)
 
 import React, { useState, useEffect } from 'react';
 import apiConfig from '../config/apiConfig';
@@ -13,13 +13,18 @@ import {
   Chip,
   Alert,
   Grid,
-  Divider
+  Divider,
+  LinearProgress
 } from '@mui/material';
 import {
   Refresh,
   CheckCircle,
   Cancel,
-  BugReport
+  Warning,
+  BugReport,
+  Memory,
+  Wifi,
+  SettingsInputComponent
 } from '@mui/icons-material';
 import useEFIOWebSocket from '../hooks/useEFIOWebSocket';
 
@@ -27,14 +32,36 @@ export default function Diagnostic() {
   const { connected, ioData, systemData, socket } = useEFIOWebSocket();
   const [restApiStatus, setRestApiStatus] = useState('Checking...');
   const [logs, setLogs] = useState([]);
+  const [healthStatus, setHealthStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   const addLog = (message, type = 'info') => {
     const timestamp = new Date().toLocaleTimeString();
     setLogs(prev => [...prev.slice(-20), { timestamp, message, type }]);
   };
 
+  // Fetch health status every 3 seconds
   useEffect(() => {
-    // Test REST API
+    fetchHealthStatus();
+    const interval = setInterval(fetchHealthStatus, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const fetchHealthStatus = async () => {
+    try {
+      const response = await fetch(`${apiConfig.baseUrl}/api/health/detailed`);
+      const data = await response.json();
+      setHealthStatus(data);
+      setLoading(false);
+    } catch (error) {
+      console.error('Health check failed:', error);
+      setHealthStatus(null);
+      setLoading(false);
+    }
+  };
+
+  // Test REST API on mount
+  useEffect(() => {
     fetch(`${apiConfig.baseUrl}/api/status`)
       .then(res => res.json())
       .then(data => {
@@ -72,11 +99,7 @@ export default function Diagnostic() {
   };
 
   const testWebSocketIO = () => {
-    if (!socket) {
-      addLog('Socket not initialized!', 'error');
-      return;
-    }
-    if (!connected) {
+    if (!socket || !connected) {
       addLog('Socket not connected!', 'error');
       return;
     }
@@ -85,11 +108,7 @@ export default function Diagnostic() {
   };
 
   const testWebSocketSystem = () => {
-    if (!socket) {
-      addLog('Socket not initialized!', 'error');
-      return;
-    }
-    if (!connected) {
+    if (!socket || !connected) {
       addLog('Socket not connected!', 'error');
       return;
     }
@@ -109,17 +128,210 @@ export default function Diagnostic() {
     }, 1000);
   };
 
+  // Helper: Get status color
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'healthy': return 'success';
+      case 'degraded': return 'warning';
+      case 'unhealthy': return 'error';
+      default: return 'default';
+    }
+  };
+
+  // Helper: Get status icon
+  const getStatusIcon = (status) => {
+    switch (status) {
+      case 'healthy': return <CheckCircle />;
+      case 'degraded': return <Warning />;
+      case 'unhealthy': return <Cancel />;
+      default: return <Cancel />;
+    }
+  };
+
   return (
     <Box sx={{ p: 3 }}>
       <Box display="flex" alignItems="center" gap={2} mb={3}>
         <BugReport sx={{ fontSize: 40 }} />
         <Typography variant="h4" fontWeight="bold">
-          Connection Diagnostic
+          System Diagnostic
         </Typography>
+        <Button
+          variant="outlined"
+          startIcon={<Refresh />}
+          onClick={fetchHealthStatus}
+          sx={{ ml: 'auto' }}
+        >
+          Refresh Health
+        </Button>
       </Box>
 
       <Grid container spacing={3}>
-        {/* Connection Status */}
+        {/* Overall Health Status */}
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+                <Typography variant="h6">Overall System Health</Typography>
+                {loading ? (
+                  <LinearProgress sx={{ width: 100 }} />
+                ) : (
+                  <Chip
+                    icon={healthStatus ? getStatusIcon(healthStatus.status) : <Cancel />}
+                    label={healthStatus ? healthStatus.status.toUpperCase() : 'UNKNOWN'}
+                    color={healthStatus ? getStatusColor(healthStatus.status) : 'default'}
+                    size="large"
+                  />
+                )}
+              </Box>
+              
+              {healthStatus && healthStatus.system && (
+                <Grid container spacing={2}>
+                  <Grid item xs={3}>
+                    <Typography variant="body2" color="text.secondary">CPU Usage</Typography>
+                    <Typography variant="h6">{healthStatus.system.cpu_percent}%</Typography>
+                  </Grid>
+                  <Grid item xs={3}>
+                    <Typography variant="body2" color="text.secondary">Memory</Typography>
+                    <Typography variant="h6">{healthStatus.system.memory_percent}%</Typography>
+                  </Grid>
+                  <Grid item xs={3}>
+                    <Typography variant="body2" color="text.secondary">Temperature</Typography>
+                    <Typography variant="h6">{healthStatus.system.temperature_celsius}°C</Typography>
+                  </Grid>
+                  <Grid item xs={3}>
+                    <Typography variant="body2" color="text.secondary">Uptime</Typography>
+                    <Typography variant="h6">
+                      {Math.floor(healthStatus.uptime / 3600)}h {Math.floor((healthStatus.uptime % 3600) / 60)}m
+                    </Typography>
+                  </Grid>
+                </Grid>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Component Health Status */}
+        <Grid item xs={12}>
+          <Typography variant="h6" gutterBottom>
+            Component Health Status
+          </Typography>
+        </Grid>
+
+        {/* GPIO Status */}
+        <Grid item xs={12} md={4}>
+          <Card>
+            <CardContent>
+              <Box display="flex" alignItems="center" gap={1} mb={2}>
+                <Memory sx={{ fontSize: 32, color: 'primary.main' }} />
+                <Typography variant="h6">GPIO (I/O)</Typography>
+              </Box>
+              
+              {loading ? (
+                <LinearProgress />
+              ) : healthStatus?.components?.gpio ? (
+                <>
+                  <Chip
+                    icon={getStatusIcon(healthStatus.components.gpio.status)}
+                    label={healthStatus.components.gpio.status.toUpperCase()}
+                    color={getStatusColor(healthStatus.components.gpio.status)}
+                    size="small"
+                    sx={{ mb: 1 }}
+                  />
+                  <Typography variant="body2" color="text.secondary">
+                    {healthStatus.components.gpio.message}
+                  </Typography>
+                  {healthStatus.components.gpio.last_update && (
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+                      Last update: {new Date(healthStatus.components.gpio.last_update).toLocaleTimeString()}
+                    </Typography>
+                  )}
+                </>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  No data available
+                </Typography>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* MQTT Status */}
+        <Grid item xs={12} md={4}>
+          <Card>
+            <CardContent>
+              <Box display="flex" alignItems="center" gap={1} mb={2}>
+                <Wifi sx={{ fontSize: 32, color: 'secondary.main' }} />
+                <Typography variant="h6">MQTT Broker</Typography>
+              </Box>
+              
+              {loading ? (
+                <LinearProgress />
+              ) : healthStatus?.components?.mqtt ? (
+                <>
+                  <Chip
+                    icon={getStatusIcon(healthStatus.components.mqtt.status)}
+                    label={healthStatus.components.mqtt.status.toUpperCase()}
+                    color={getStatusColor(healthStatus.components.mqtt.status)}
+                    size="small"
+                    sx={{ mb: 1 }}
+                  />
+                  <Typography variant="body2" color="text.secondary">
+                    {healthStatus.components.mqtt.message}
+                  </Typography>
+                  {healthStatus.components.mqtt.last_update && (
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+                      Last update: {new Date(healthStatus.components.mqtt.last_update).toLocaleTimeString()}
+                    </Typography>
+                  )}
+                </>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  No data available
+                </Typography>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Modbus Status */}
+        <Grid item xs={12} md={4}>
+          <Card>
+            <CardContent>
+              <Box display="flex" alignItems="center" gap={1} mb={2}>
+                <SettingsInputComponent sx={{ fontSize: 32, color: 'success.main' }} />
+                <Typography variant="h6">Modbus</Typography>
+              </Box>
+              
+              {loading ? (
+                <LinearProgress />
+              ) : healthStatus?.components?.modbus ? (
+                <>
+                  <Chip
+                    icon={getStatusIcon(healthStatus.components.modbus.status)}
+                    label={healthStatus.components.modbus.status.toUpperCase()}
+                    color={getStatusColor(healthStatus.components.modbus.status)}
+                    size="small"
+                    sx={{ mb: 1 }}
+                  />
+                  <Typography variant="body2" color="text.secondary">
+                    {healthStatus.components.modbus.message}
+                  </Typography>
+                  {healthStatus.components.modbus.last_update && (
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+                      Last update: {new Date(healthStatus.components.modbus.last_update).toLocaleTimeString()}
+                    </Typography>
+                  )}
+                </>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  No devices connected
+                </Typography>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Connection Status (Original) */}
         <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
@@ -284,16 +496,16 @@ export default function Diagnostic() {
 
         {/* Instructions */}
         <Grid item xs={12}>
-          <Alert severity="warning">
+          <Alert severity="info">
             <Typography variant="subtitle2" gutterBottom>
-              If WebSocket is not connecting:
+              <strong>🧪 Testing GPIO Resilience:</strong>
             </Typography>
             <ol style={{ marginLeft: 20, marginTop: 8 }}>
-              <li>Check Flask backend is running: <code>python3 api/app.py</code></li>
-              <li>Verify backend shows: "🚀 EFIO API Server with WebSocket"</li>
-              <li>Check port 5000 is open: <code>sudo lsof -i :5000</code></li>
-              <li>Check browser console (F12) for error messages</li>
-              <li>Try disabling firewall: <code>sudo ufw disable</code></li>
+              <li>Watch the "GPIO (I/O)" card above</li>
+              <li>Physically unplug a DI wire (e.g., DI1)</li>
+              <li>After ~5 seconds, status should change to "DEGRADED"</li>
+              <li>Reconnect the wire</li>
+              <li>After ~30 seconds, status should return to "HEALTHY"</li>
             </ol>
           </Alert>
         </Grid>

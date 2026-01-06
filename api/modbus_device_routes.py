@@ -121,6 +121,21 @@ def cleanup_connection(device_id, reason=None):
             except Exception:
                 pass
 
+        # Reset circuit breaker for this device so reconnects can be attempted
+        try:
+            if device_id in circuit_breakers:
+                try:
+                    circuit_breakers[device_id].reset()
+                    print(f"Circuit breaker for {device_id} reset during cleanup")
+                except Exception:
+                    # If reset fails, remove the breaker entry to avoid blocking reconnects
+                    try:
+                        del circuit_breakers[device_id]
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
         # update device metadata
         devices = load_devices()
         device = next((d for d in devices if d['id'] == device_id), None)
@@ -467,7 +482,10 @@ def read_registers(device_id):
     count = int(data.get('count', 1))
     function_code = int(data.get('function_code', 3))
     
-    breaker = get_breaker(device_id, name=device.get('name'))
+    # load device metadata for breaker naming and settings
+    devices = load_devices()
+    device = next((d for d in devices if d['id'] == device_id), {})
+    breaker = get_breaker(device_id, name=device.get('name') if device else None)
     if breaker.get_state().get('state') == 'open':
         return jsonify({"error": "Device circuit open due to repeated failures"}), 503
 
@@ -533,7 +551,10 @@ def write_register(device_id):
     value = data.get('value')
     function_code = int(data.get('function_code', 6))
     
-    breaker = get_breaker(device_id, name=device.get('name'))
+    # load device metadata for breaker naming and settings
+    devices = load_devices()
+    device = next((d for d in devices if d['id'] == device_id), {})
+    breaker = get_breaker(device_id, name=device.get('name') if device else None)
     if breaker.get_state().get('state') == 'open':
         return jsonify({"error": "Device circuit open due to repeated failures"}), 503
 

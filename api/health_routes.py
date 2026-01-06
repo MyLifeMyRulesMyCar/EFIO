@@ -262,10 +262,32 @@ def circuit_breaker_status():
     """
     try:
         daemon = current_app.daemon
-        
-        breakers = {
-            "mqtt": daemon.mqtt_breaker.get_state()
-        }
+
+        # Start with daemon-level breakers if present
+        breakers = {}
+        try:
+            if hasattr(daemon, 'mqtt_breaker') and daemon.mqtt_breaker:
+                breakers['mqtt'] = daemon.mqtt_breaker.get_state()
+        except Exception:
+            pass
+
+        # Include GPIO breaker from daemon manager if available
+        try:
+            if hasattr(daemon, 'manager') and hasattr(daemon.manager, 'gpio_breaker') and daemon.manager.gpio_breaker:
+                breakers['gpio'] = daemon.manager.gpio_breaker.get_state()
+        except Exception:
+            pass
+
+        # Include Modbus per-device breakers
+        try:
+            from api.modbus_device_routes import circuit_breakers as modbus_cbs
+            for dev_id, cb in modbus_cbs.items():
+                try:
+                    breakers[f"modbus:{dev_id}"] = cb.get_state()
+                except Exception:
+                    breakers[f"modbus:{dev_id}"] = {"error": "unavailable"}
+        except Exception:
+            pass
         
         return jsonify({
             "circuit_breakers": breakers,
