@@ -49,9 +49,55 @@ export default function Diagnostic() {
 
   const fetchHealthStatus = async () => {
     try {
-      const response = await fetch(`${apiConfig.baseUrl}/api/health/detailed`);
-      const data = await response.json();
-      setHealthStatus(data);
+      // Fetch main detailed health
+      const respMain = await fetch(`${apiConfig.baseUrl}/api/health/detailed`);
+      const main = await respMain.json();
+
+      // Fetch MQTT and Modbus endpoints (optional; backend may not include them in detailed)
+      const [respMqtt, respModbus] = await Promise.allSettled([
+        fetch(`${apiConfig.baseUrl}/api/health/mqtt`),
+        fetch(`${apiConfig.baseUrl}/api/health/modbus`)
+      ]);
+
+      const components = {};
+
+      if (respMqtt.status === 'fulfilled') {
+        try {
+          const mqttData = await respMqtt.value.json();
+          components.mqtt = {
+            status: mqttData.connected ? 'healthy' : 'unhealthy',
+            message: mqttData.broker ? `${mqttData.broker}:${mqttData.port}` : 'MQTT status',
+            last_update: mqttData.timestamp || null,
+            details: mqttData
+          };
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      if (respModbus.status === 'fulfilled') {
+        try {
+          const modbusData = await respModbus.value.json();
+          components.modbus = {
+            status: modbusData.count && modbusData.count > 0 ? 'healthy' : 'degraded',
+            message: `${modbusData.count || 0} devices`,
+            last_update: modbusData.timestamp || null,
+            details: modbusData
+          };
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      // Normalize the healthStatus expected by the UI
+      setHealthStatus({
+        ...main,
+        components: {
+          // keep any existing components in main if present
+          ...(main.components || {}),
+          ...components
+        }
+      });
       setLoading(false);
     } catch (error) {
       console.error('Health check failed:', error);
@@ -211,13 +257,13 @@ export default function Diagnostic() {
         </Grid>
 
         {/* Component Health Status */}
-        <Grid item xs={12}>
+        {/* <Grid item xs={12}>
           <Typography variant="h6" gutterBottom>
             Component Health Status
           </Typography>
         </Grid>
 
-        {/* GPIO Status */}
+        {/* GPIO Status 
         <Grid item xs={12} md={4}>
           <Card>
             <CardContent>
@@ -253,7 +299,7 @@ export default function Diagnostic() {
               )}
             </CardContent>
           </Card>
-        </Grid>
+        </Grid> */}
 
         {/* MQTT Status */}
         <Grid item xs={12} md={4}>
@@ -498,14 +544,13 @@ export default function Diagnostic() {
         <Grid item xs={12}>
           <Alert severity="info">
             <Typography variant="subtitle2" gutterBottom>
-              <strong>🧪 Testing GPIO Resilience:</strong>
+              <strong>🧪 Testing I/O Resilience:</strong>
             </Typography>
             <ol style={{ marginLeft: 20, marginTop: 8 }}>
-              <li>Watch the "GPIO (I/O)" card above</li>
-              <li>Physically unplug a DI wire (e.g., DI1)</li>
-              <li>After ~5 seconds, status should change to "DEGRADED"</li>
-              <li>Reconnect the wire</li>
-              <li>After ~30 seconds, status should return to "HEALTHY"</li>
+              <li>Watch the I/O and Connection cards above</li>
+              <li>If you have physical I/O, toggle or disconnect to observe behavior</li>
+              <li>The system may enter simulation mode automatically on hardware faults</li>
+              <li>Recovery attempts run in background and will resume hardware when possible</li>
             </ol>
           </Alert>
         </Grid>

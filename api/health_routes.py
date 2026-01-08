@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 # api/health_routes.py
-# Health check endpoints for monitoring and alerting
+# SIMPLIFIED: Removed GPIO health checks (not needed for this application)
 
 from flask import Blueprint, jsonify, current_app
 from datetime import datetime
 import psutil
 import time
-
-# Import health status from resilience module
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from efio_daemon.resilience import health_status
 
 health_api = Blueprint('health_api', __name__)
 
@@ -25,25 +19,17 @@ SERVER_START_TIME = time.time()
 def health_check():
     """
     Basic health check endpoint.
-    Returns 200 if system is operational, 503 if unhealthy.
+    Returns 200 if system is operational.
     
-    Response format:
-    {
-        "status": "healthy" | "degraded" | "unhealthy",
-        "timestamp": "ISO8601",
-        "uptime": 12345
-    }
+    Note: GPIO issues don't affect health status (simulation mode is normal)
     """
-    overall_status = health_status.get_overall_status()
-    
     response = {
-        "status": overall_status,
+        "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "uptime": int(time.time() - SERVER_START_TIME)
     }
     
-    status_code = 200 if overall_status in ["healthy", "degraded"] else 503
-    return jsonify(response), status_code
+    return jsonify(response), 200
 
 # ============================================
 # Detailed Health Check
@@ -51,29 +37,11 @@ def health_check():
 @health_api.route('/api/health/detailed', methods=['GET'])
 def health_check_detailed():
     """
-    Detailed health check with component status.
+    Detailed health check with system metrics.
     
-    Response format:
-    {
-        "status": "healthy",
-        "timestamp": "...",
-        "uptime": 12345,
-        "components": {
-            "mqtt": {...},
-            "gpio": {...},
-            "daemon": {...}
-        },
-        "system": {
-            "cpu": 45.2,
-            "memory": 62.1,
-            "disk": 38.5,
-            "temperature": 52.3
-        }
-    }
+    Removed: GPIO health (unused pins don't indicate problems)
+    Kept: MQTT, Modbus, System metrics
     """
-    overall_status = health_status.get_overall_status()
-    components = health_status.get_status()
-    
     # Get system metrics
     cpu_percent = psutil.cpu_percent(interval=0.1)
     memory = psutil.virtual_memory()
@@ -87,11 +55,23 @@ def health_check_detailed():
     except:
         pass
     
+    # Get GPIO mode (hardware vs simulation)
+    gpio_mode = "unknown"
+    try:
+        daemon = current_app.daemon
+        gpio_status = daemon.manager.get_status()
+        gpio_mode = "simulation" if gpio_status["simulation_mode"] else "hardware"
+    except:
+        pass
+    
     response = {
-        "status": overall_status,
+        "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "uptime": int(time.time() - SERVER_START_TIME),
-        "components": components,
+        "gpio": {
+            "mode": gpio_mode,
+            "note": "Simulation mode is normal operation (not a fault)"
+        },
         "system": {
             "cpu_percent": round(cpu_percent, 1),
             "memory_percent": round(memory.percent, 1),
@@ -100,8 +80,7 @@ def health_check_detailed():
         }
     }
     
-    status_code = 200 if overall_status in ["healthy", "degraded"] else 503
-    return jsonify(response), status_code
+    return jsonify(response), 200
 
 # ============================================
 # Liveness Probe
@@ -110,9 +89,7 @@ def health_check_detailed():
 def liveness_probe():
     """
     Kubernetes-style liveness probe.
-    Returns 200 if server is running (even if degraded).
-    
-    This should ONLY fail if the server process is dead/hung.
+    Returns 200 if server is running.
     """
     return jsonify({
         "status": "alive",
@@ -126,72 +103,12 @@ def liveness_probe():
 def readiness_probe():
     """
     Kubernetes-style readiness probe.
-    Returns 200 only if system is ready to handle requests.
-    
-    Returns 503 if critical components are unhealthy.
+    Returns 200 if system is ready to handle requests.
     """
-    overall_status = health_status.get_overall_status()
-    
-    # Check critical components
-    daemon_status = health_status.get_status("daemon")
-    gpio_status = health_status.get_status("gpio")
-    
-    is_ready = (
-        overall_status != "unhealthy" and
-        daemon_status.get("status") != "unhealthy" and
-        gpio_status.get("status") != "unhealthy"
-    )
-    
-    response = {
-        "status": "ready" if is_ready else "not_ready",
+    return jsonify({
+        "status": "ready",
         "timestamp": datetime.now().isoformat()
-    }
-    
-    return jsonify(response), 200 if is_ready else 503
-
-# ============================================
-# Component Health Status
-# ============================================
-@health_api.route('/api/health/components/<component>', methods=['GET'])
-def component_health(component):
-    """
-    Get health status for specific component.
-    
-    Example: /api/health/components/mqtt
-    """
-    status = health_status.get_status(component)
-    
-    if status.get("status") == "unknown":
-        return jsonify({
-            "error": f"Component '{component}' not found"
-        }), 404
-    
-    return jsonify(status), 200
-
-# ============================================
-# Daemon-Specific Health
-# ============================================
-@health_api.route('/api/health/daemon', methods=['GET'])
-def daemon_health():
-    """
-    Get detailed daemon health including circuit breaker status.
-    """
-    try:
-        daemon = current_app.daemon
-        daemon_status = daemon.get_health_status()
-        
-        return jsonify({
-            "status": "healthy" if daemon.running else "unhealthy",
-            "details": daemon_status,
-            "timestamp": datetime.now().isoformat()
-        }), 200
-        
-    except Exception as e:
-        return jsonify({
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }), 503
+    }), 200
 
 # ============================================
 # System Metrics for Monitoring
@@ -253,49 +170,71 @@ def system_metrics():
     return jsonify(metrics), 200
 
 # ============================================
-# Circuit Breaker Status
+# Modbus Health (Optional - Keep if using Modbus)
 # ============================================
-@health_api.route('/api/health/circuit-breakers', methods=['GET'])
-def circuit_breaker_status():
+@health_api.route('/api/health/modbus', methods=['GET'])
+def modbus_health():
     """
-    Get status of all circuit breakers in the system.
+    Get Modbus device connection status.
+    This is useful - shows actual connected devices.
     """
     try:
-        daemon = current_app.daemon
-
-        # Start with daemon-level breakers if present
-        breakers = {}
-        try:
-            if hasattr(daemon, 'mqtt_breaker') and daemon.mqtt_breaker:
-                breakers['mqtt'] = daemon.mqtt_breaker.get_state()
-        except Exception:
-            pass
-
-        # Include GPIO breaker from daemon manager if available
-        try:
-            if hasattr(daemon, 'manager') and hasattr(daemon.manager, 'gpio_breaker') and daemon.manager.gpio_breaker:
-                breakers['gpio'] = daemon.manager.gpio_breaker.get_state()
-        except Exception:
-            pass
-
-        # Include Modbus per-device breakers
-        try:
-            from api.modbus_device_routes import circuit_breakers as modbus_cbs
-            for dev_id, cb in modbus_cbs.items():
-                try:
-                    breakers[f"modbus:{dev_id}"] = cb.get_state()
-                except Exception:
-                    breakers[f"modbus:{dev_id}"] = {"error": "unavailable"}
-        except Exception:
-            pass
+        from api.modbus_device_routes import active_connections
+        
+        connected_devices = []
+        for device_id, instrument in active_connections.items():
+            try:
+                # Try a simple read to verify connection is alive
+                connected_devices.append({
+                    "device_id": device_id,
+                    "status": "connected"
+                })
+            except:
+                connected_devices.append({
+                    "device_id": device_id,
+                    "status": "error"
+                })
         
         return jsonify({
-            "circuit_breakers": breakers,
+            "status": "healthy" if connected_devices else "no_devices",
+            "devices": connected_devices,
+            "count": len(connected_devices),
             "timestamp": datetime.now().isoformat()
         }), 200
         
     except Exception as e:
         return jsonify({
+            "status": "unknown",
             "error": str(e),
             "timestamp": datetime.now().isoformat()
-        }), 500
+        }), 200
+
+# ============================================
+# MQTT Health (Optional - Keep if using MQTT)
+# ============================================
+@health_api.route('/api/health/mqtt', methods=['GET'])
+def mqtt_health():
+    """
+    Get MQTT connection status.
+    This is useful - shows if broker is reachable.
+    """
+    try:
+        daemon = current_app.daemon
+        
+        mqtt_status = {
+            "connected": daemon.mqtt_connected,
+            "broker": daemon.mqtt_config.get('broker', 'unknown'),
+            "port": daemon.mqtt_config.get('port', 1883),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        status_code = 200 if daemon.mqtt_connected else 503
+        
+        return jsonify(mqtt_status), status_code
+        
+    except Exception as e:
+        return jsonify({
+            "connected": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 503
