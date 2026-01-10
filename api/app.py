@@ -12,6 +12,12 @@ import time
 import os
 import sys
 import json
+import signal
+import systemd.daemon
+from datetime import datetime
+#!/usr/bin/env python3
+# api/app.py - Add this import at the top with other imports
+
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,6 +37,9 @@ from api.modbus_mqtt_bridge_routes import modbus_mqtt_api, set_bridge_instance
 from efio_daemon.modbus_mqtt_bridge import ModbusMQTTBridge
 from api.mqtt_config import load_mqtt_config
 from api.health_routes import health_api
+
+# Local package imports that rely on project root in sys.path
+from efio_daemon.watchdog import WatchdogTimer
 # ============================================
 # Initialize Flask app
 # ============================================
@@ -122,6 +131,16 @@ DEFAULT_MQTT_CONFIG = {
     "keepalive": 60,
     "qos": 1
 }
+# Create watchdog (60 second timeout)
+watchdog = WatchdogTimer(
+    timeout=60,
+    on_timeout=lambda: print("⚠️ WATCHDOG TIMEOUT - System may need restart")
+)
+
+# Watchdog feed thread control
+_watchdog_feed_thread = None
+_watchdog_feed_running = False
+
 
 '''
 def load_mqtt_config():
@@ -333,6 +352,37 @@ def mqtt_publish(topic, payload, retain=False):
             return False
     return False
 
+# Register health check functions
+def check_daemon_health():
+    """Check if main daemon is running"""
+    try:
+        return daemon.running and daemon.loop_count > 0
+    except:
+        return False
+
+def check_mqtt_health():
+    """Check MQTT connection"""
+    try:
+        mqtt_config = load_mqtt_config()
+        if not mqtt_config.get('enabled', True):
+            return True  # Not required when disabled
+        return mqtt_client and mqtt_client.is_connected()
+    except:
+        return False
+
+def check_gpio_health():
+    """Check GPIO status"""
+    try:
+        from efio_daemon.state import state
+        # In simulation mode, we're still operational
+        return True
+    except:
+        return False
+
+# Register components with watchdog
+watchdog.register_component("daemon", check_daemon_health)
+watchdog.register_component("mqtt", check_mqtt_health)
+watchdog.register_component("gpio", check_gpio_health)
 
 
 # ============================================
@@ -539,6 +589,146 @@ def mqtt_publish_test():
     })
 
 # ============================================
+# ADD NEW HEALTH ENDPOINT
+# ============================================
+
+@app.route('/api/health/watchdog', methods=['GET'])
+def watchdog_health():
+    """
+    Comprehensive health check for systemd watchdog.
+    Returns 200 only if all critical systems are healthy.
+    """
+    try:
+        report = watchdog.get_health_report()
+        
+        # Determine overall health
+        watchdog_ok = report['watchdog']['status'] == 'healthy'
+        
+        # Check critical components
+        critical_components = ['daemon', 'mqtt']
+        components_ok = all(
+            report['components'].get(comp, {}).get('status') == 'healthy'
+            for comp in critical_components
+        )
+        
+        overall_healthy = watchdog_ok and components_ok
+        
+        response = {
+            "status": "healthy" if overall_healthy else "unhealthy",
+            "timestamp": datetime.now().isoformat(),
+            "watchdog": report['watchdog'],
+            "components": report['components']
+        }
+        
+        status_code = 200 if overall_healthy else 503
+        return jsonify(response), status_code
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+# ============================================
+# WATCHDOG TESTING ENDPOINTS (Development Only)
+# ============================================
+
+@app.route('/api/test/watchdog/stop', methods=['POST'])
+def test_watchdog_stop():
+    """
+    Test endpoint: Stop feeding the watchdog.
+    This should cause systemd to restart the service in ~60-90 seconds.
+    """
+    try:
+        # Stop both the software watchdog and the systemd feed thread
+        stop_watchdog_feed()
+        return jsonify({
+            "status": "watchdog_stopped",
+            "message": "Watchdog feeding stopped. Service should restart in 60-90 seconds if systemd watchdog is enabled.",
+            "warning": "This is a destructive test!"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/test/watchdog/status', methods=['GET'])
+def test_watchdog_status():
+    """
+    Get detailed watchdog status for testing.
+    """
+    try:
+        report = watchdog.get_health_report()
+        return jsonify({
+            "watchdog_thread_running": watchdog.running,
+            "watchdog_feed_running": _watchdog_feed_running,
+            "last_feed": report['watchdog'].get('last_feed'),
+            "time_since_feed": report['watchdog'].get('time_since_feed'),
+            "timeout": report['watchdog'].get('timeout'),
+            "components": report['components']
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/test/crash', methods=['POST'])
+def test_crash():
+    """
+    Test endpoint: Crash the application immediately.
+    This should trigger an immediate systemd restart.
+    """
+    import os
+    print("⚠️ TEST: Crashing application NOW!")
+    os._exit(1)  # Hard crash
+
+
+@app.route('/api/test/segfault', methods=['POST'])
+def test_segfault():
+    """
+    Test endpoint: Simulate a Python segfault.
+    This should trigger an immediate systemd restart.
+    """
+    import ctypes
+    print("⚠️ TEST: Triggering segfault!")
+    ctypes.string_at(0)  # This will cause a segfault
+    return jsonify({"status": "this won't be reached"})
+
+
+@app.route('/api/test/daemon/break', methods=['POST'])
+def test_daemon_break():
+    """
+    Test endpoint: Break the daemon component.
+    This should cause component health check to fail.
+    """
+    try:
+        daemon.stop()
+        return jsonify({
+            "status": "daemon_stopped",
+            "message": "Daemon stopped. Health checks should now fail."
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================
+# MONITORING ENDPOINT
+# ============================================
+
+@app.route('/api/test/watchdog/feed-manual', methods=['POST'])
+def test_watchdog_feed_manual():
+    """
+    Manually feed the watchdog once (for testing).
+    """
+    try:
+        watchdog.feed()
+        return jsonify({
+            "status": "fed",
+            "message": "Watchdog manually fed"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ============================================
 # WebSocket Events
 # ============================================
 
@@ -706,18 +896,109 @@ def start_background_thread():
     background_thread.start()
     print("✅ Background broadcast thread started")
 
+
+# ============================================
+# ADD WATCHDOG FEED IN BACKGROUND THREAD
+# ============================================
+
+def watchdog_feed_loop():
+    """
+    Background thread that feeds watchdog.
+    This proves the main event loop is still running.
+    """
+    global _watchdog_feed_running
+    while _watchdog_feed_running:
+        try:
+            # Feed watchdog to show we're alive
+            watchdog.feed()
+            
+            # Also notify systemd we're alive (for systemd watchdog)
+            try:
+                systemd.daemon.notify('WATCHDOG=1')
+            except:
+                pass
+            
+        except Exception as e:
+            print(f"❌ Watchdog feed error: {e}")
+        
+        # Sleep ALWAYS happens, outside the exception handling
+        time.sleep(30)  # Feed every 30 seconds (timeout is 60s)
+
+def start_watchdog_thread():
+    """Start watchdog monitoring and feeding"""
+    # Start watchdog timer
+    watchdog.start()
+    
+    # Start feed thread (controlled by _watchdog_feed_running)
+    global _watchdog_feed_thread, _watchdog_feed_running
+    if _watchdog_feed_thread and _watchdog_feed_thread.is_alive():
+        print("⚠️ Watchdog feed thread already running")
+        return
+
+    _watchdog_feed_running = True
+    _watchdog_feed_thread = threading.Thread(
+        target=watchdog_feed_loop,
+        name="WatchdogFeed",
+        daemon=True
+    )
+    _watchdog_feed_thread.start()
+    
+    print("✅ Watchdog monitoring started (60s timeout)")
+
+
+def stop_watchdog_feed():
+    """Stop the watchdog feed thread and the watchdog monitor"""
+    global _watchdog_feed_thread, _watchdog_feed_running
+    print("Stopping watchdog feed thread")
+    _watchdog_feed_running = False
+    if _watchdog_feed_thread:
+        _watchdog_feed_thread.join(timeout=5)
+        _watchdog_feed_thread = None
+    # Also stop the software watchdog
+    try:
+        watchdog.stop()
+    except:
+        pass
+    print("Watchdog feed stopped")
+
+# ============================================
+# ADD SIGNAL HANDLERS FOR GRACEFUL SHUTDOWN
+# ============================================
+
+def signal_handler(sig, frame):
+    """Handle shutdown signals gracefully"""
+    print(f"\n⚠️ Received signal {sig}, shutting down gracefully...")
+    
+    # Stop watchdog
+    watchdog.stop()
+    
+    # Stop daemon
+    daemon.stop()
+    
+    # Notify systemd we're stopping
+    try:
+        systemd.daemon.notify('STOPPING=1')
+    except:
+        pass
+    
+    sys.exit(0)
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
 # ============================================
 # Main
 # ============================================
 
+
 if __name__ == '__main__':
     print("\n" + "=" * 60)
-    print("🚀 EFIO API Server with Dynamic Configuration")
+    print("🚀 EFIO API Server with Watchdog")
     print("=" * 60)
     print(f"📡 HTTP API: http://{Config.FLASK_HOST}:{Config.FLASK_PORT}")
     print(f"🔌 WebSocket: ws://{Config.FLASK_HOST}:{Config.FLASK_PORT}")
-    print(f"🌐 Access URL: {Config.API_BASE_URL}")
-    print(f"🔧 Debug Mode: {Config.FLASK_DEBUG}")
+    print(f"🐕 Watchdog: 60s timeout with systemd integration")
     print("=" * 60 + "\n")
     
     # Initialize MQTT
@@ -727,21 +1008,33 @@ if __name__ == '__main__':
     else:
         print("⚠️ Running without MQTT (fallback mode)")
     
+    # Initialize Modbus-MQTT bridge
     init_modbus_mqtt_bridge()
-    # Start background thread
+    
+    # Start background threads
     start_background_thread()
     
+    # Initialize OLED
     init_oled_display()
     import atexit
     atexit.register(stop_oled_display)
-    start_background_thread()
-
-        # Cleanup bridge on exit
+    
+    # Cleanup bridge on exit
     def cleanup_bridge():
         if modbus_bridge:
             modbus_bridge.stop()
     atexit.register(cleanup_bridge)
-
+    
+    # START WATCHDOG MONITORING
+    start_watchdog_thread()
+    
+    # Notify systemd we're ready
+    try:
+        systemd.daemon.notify('READY=1')
+        print("✅ Notified systemd: Service ready")
+    except:
+        print("⚠️ systemd notification not available (running standalone)")
+    
     # Run with SocketIO
     socketio.run(
         app, 
