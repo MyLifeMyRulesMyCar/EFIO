@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # efio_daemon/io_manager.py
-# SIMPLIFIED: No unnecessary health checks, just reliable I/O
+# FIXED: Proper locking for GPIO hardware access
 
 import gpiod
 from gpiod.line import Direction, Value, Bias
@@ -26,19 +26,17 @@ OUTPUT_PINS = {
 
 class IOManager:
     """
-    Simple, reliable GPIO manager.
+    GPIO manager with proper thread safety.
     
-    Design principles:
-    - No health checks (unused pins are normal)
-    - Graceful degradation to simulation mode on hardware failure
-    - Automatic recovery attempts in background
-    - Simple error handling
+    CRITICAL FIX: The _lock protects gpiod hardware access,
+    while state.lock() protects shared state access.
+    These are DIFFERENT locks serving different purposes.
     """
     
     def __init__(self):
         self.requests_in = {}
         self.requests_out = {}
-        self._lock = threading.RLock()
+        self._hw_lock = threading.RLock()  # Renamed for clarity
         self._reinit_thread = None
         self._stop_reinit = False
         
@@ -57,7 +55,7 @@ class IOManager:
     # Hardware Setup
     # ================================
     def _setup_inputs(self):
-        """Setup input pins"""
+        """Setup input pins (must be called with _hw_lock held)"""
         chips = {}
         for name, (chip, line) in INPUT_PINS.items():
             chips.setdefault(chip, []).append(line)
@@ -76,7 +74,7 @@ class IOManager:
             self.requests_in[chip] = req
 
     def _setup_outputs(self):
-        """Setup output pins"""
+        """Setup output pins (must be called with _hw_lock held)"""
         chips = {}
         for name, (chip, line) in OUTPUT_PINS.items():
             chips.setdefault(chip, []).append(line)
@@ -95,7 +93,7 @@ class IOManager:
             self.requests_out[chip] = req
 
     def _cleanup_hardware(self):
-        """Clean up GPIO requests"""
+        """Clean up GPIO requests (must be called with _hw_lock held)"""
         try:
             for req in self.requests_in.values():
                 try:
@@ -115,30 +113,30 @@ class IOManager:
 
     def _init_hardware(self):
         """Initialize GPIO hardware"""
-        self._cleanup_hardware()
-        self._setup_inputs()
-        self._setup_outputs()
+        with self._hw_lock:
+            self._cleanup_hardware()
+            self._setup_inputs()
+            self._setup_outputs()
         state.set_simulation(False)
 
     # ================================
-    # Public API
+    # Public API - FIXED RACE CONDITIONS
     # ================================
     def read_all_inputs(self):
         """
-        Read all digital inputs.
-        Returns list of [0, 0, 0, 0] values.
+        Read all digital inputs with proper locking.
         
-        Note: If hardware fails, switches to simulation mode
-        and returns last known state.
+        CRITICAL FIX: Use BOTH locks in correct order:
+        1. Hardware lock (protects gpiod calls)
+        2. State lock (protects state updates)
         """
         if state.get_simulation():
             return state.get_di()
         
         try:
-            new_vals = []
-
-            # Protect hardware access with local lock to avoid concurrent gpiod calls
-            with self._lock:
+            # Step 1: Read from hardware (locked)
+            with self._hw_lock:
+                new_vals = []
                 for name, (chip, line) in INPUT_PINS.items():
                     req = self.requests_in.get(chip)
                     if not req:
@@ -148,7 +146,7 @@ class IOManager:
                     val = 1 if val_raw == Value.ACTIVE else 0
                     new_vals.append(val)
 
-            # Update state atomically
+            # Step 2: Update state atomically (separate lock)
             state.set_di_all(new_vals)
             return new_vals
             
@@ -165,32 +163,31 @@ class IOManager:
 
     def write_output(self, ch, value):
         """
-        Write digital output.
+        Write digital output with proper locking.
         
-        Args:
-            ch: Channel number (0-3)
-            value: 1 (ON) or 0 (OFF)
+        CRITICAL FIX: Update state FIRST, then hardware.
+        This ensures state is always consistent even if hardware fails.
         """
-        # Always update state first (thread-safe)
+        # Step 1: Update state atomically (always succeeds)
         state.set_do(ch, value)
         
-        # If in simulation, just log
+        # Step 2: If in simulation, we're done
         if state.get_simulation():
             print(f"💾 Simulation: DO{ch} = {value}")
             return
         
-        # Try to write to hardware
+        # Step 3: Write to hardware (protected by hw_lock)
         try:
             pin_key = f"DO{ch}"
             chip, line = OUTPUT_PINS[pin_key]
             
-            req = self.requests_out.get(chip)
-            if not req:
-                raise RuntimeError(f"GPIO chip {chip} not available")
-
-            # Protect hardware access with local lock
-            with self._lock:
+            with self._hw_lock:
+                req = self.requests_out.get(chip)
+                if not req:
+                    raise RuntimeError(f"GPIO chip {chip} not available")
+                
                 req.set_value(line, Value.ACTIVE if value else Value.INACTIVE)
+            
             print(f"✅ DO{ch} = {value}")
             
         except Exception as e:
@@ -202,22 +199,10 @@ class IOManager:
                 self._start_reinit_thread()
 
     # ================================
-    # Background Recovery
+    # Background Recovery (unchanged)
     # ================================
     def _start_reinit_thread(self):
-        """
-        Start background thread to retry hardware initialization.
-        
-        Retry schedule:
-        - Attempt 1: Wait 2s
-        - Attempt 2: Wait 4s
-        - Attempt 3: Wait 8s
-        - Attempt 4: Wait 16s
-        - Attempt 5: Wait 32s
-        - Attempt 6+: Wait 60s (max)
-        
-        Stops automatically when hardware reconnects.
-        """
+        """Start background thread to retry hardware initialization."""
         if self._reinit_thread and self._reinit_thread.is_alive():
             return
         
@@ -231,24 +216,16 @@ class IOManager:
             
             while not self._stop_reinit:
                 attempt += 1
-                
-                # Wait before retry
                 print(f"🔄 GPIO recovery attempt {attempt} in {backoff}s...")
                 time.sleep(backoff)
                 
                 try:
-                    # Try to reinitialize
                     self._init_hardware()
-                    
-                    # Success!
                     print("✅ GPIO hardware reconnected!")
                     state.set_simulation(False)
                     break
-                    
                 except Exception as e:
                     print(f"⚠️ Recovery attempt {attempt} failed: {e}")
-                    
-                    # Exponential backoff (max 60s)
                     backoff = min(backoff * 2, 60)
         
         self._reinit_thread = threading.Thread(target=reinit_loop, daemon=True)

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # api/oled_routes.py
-# REST API endpoints for OLED auto-display control
+# FIXED: Properly detect and handle simulation mode
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from oled_manager.auto_display import OLEDAutoDisplay
 from efio_daemon.state import state
+import os
 
 oled_api = Blueprint('oled_api', __name__)
 
@@ -13,13 +14,43 @@ oled_api = Blueprint('oled_api', __name__)
 display = None
 
 def init_oled_display():
-    """Initialize OLED display (call this at app startup)"""
+    """
+    Initialize OLED display (call this at app startup)
+    
+    FIXED: Auto-detect if I2C hardware is available
+    """
     global display
     if display is None:
-        simulation = state.get("simulation_oled", False)
-        display = OLEDAutoDisplay(simulation=simulation)
-        display.start()
-        print("✅ OLED Auto-Display initialized")
+        # Auto-detect simulation mode
+        simulation = state.get_simulation_oled()
+        
+        # If not explicitly set, check if I2C device exists
+        if not simulation:
+            i2c_device = "/dev/i2c-9"
+            if not os.path.exists(i2c_device):
+                print(f"⚠️  I2C device {i2c_device} not found")
+                print("📺 OLED: Running in simulation mode")
+                simulation = True
+                state.set_simulation_oled(True)
+        
+        try:
+            display = OLEDAutoDisplay(simulation=simulation)
+            display.start()
+            
+            if simulation:
+                print("✅ OLED Auto-Display initialized (SIMULATION mode)")
+                print("   Output: /tmp/oled_display.png")
+            else:
+                print("✅ OLED Auto-Display initialized (HARDWARE mode)")
+                print("   Device: /dev/i2c-9")
+        except Exception as e:
+            print(f"❌ OLED initialization failed: {e}")
+            print("📺 Falling back to simulation mode")
+            
+            # Fallback to simulation
+            state.set_simulation_oled(True)
+            display = OLEDAutoDisplay(simulation=True)
+            display.start()
 
 def stop_oled_display():
     """Stop OLED display (call this at app shutdown)"""
@@ -38,7 +69,10 @@ def stop_oled_display():
 def get_oled_status():
     """Get current OLED display status"""
     if not display:
-        return jsonify({"error": "Display not initialized"}), 500
+        return jsonify({
+            "error": "Display not initialized",
+            "running": False
+        }), 500
     
     return jsonify({
         "running": display.running,
@@ -216,28 +250,3 @@ def button_select():
     return jsonify({
         "message": "SELECT button pressed (config menu not yet implemented)"
     }), 200
-
-
-# ============================================
-# Add to api/app.py
-# ============================================
-"""
-To integrate this with your existing api/app.py, add these lines:
-
-1. At the top with other imports:
-   from api.oled_routes import oled_api, init_oled_display, stop_oled_display
-
-2. After other blueprint registrations:
-   app.register_blueprint(oled_api)
-
-3. After daemon.start():
-   init_oled_display()
-
-4. In the if __name__ == '__main__': section, before socketio.run():
-   # Initialize OLED display
-   init_oled_display()
-   
-   # Register cleanup handler
-   import atexit
-   atexit.register(stop_oled_display)
-"""
