@@ -121,6 +121,8 @@ _mqtt_callbacks = {
 
 MQTT_CONFIG_FILE = "/home/radxa/efio/mqtt_config.json"
 
+mqtt_system = {}
+
 DEFAULT_MQTT_CONFIG = {
     "broker": "localhost",
     "port": 1883,
@@ -167,9 +169,9 @@ def on_mqtt_connect(client, userdata, flags, rc):
         print("📡 MQTT: Subscribed to edgeforce/#")
         
         # Publish initial state
-        for i, val in enumerate(state["di"]):
+        for i, val in enumerate(state.get_di()):
             client.publish(f"edgeforce/io/di/{i+1}", val, retain=True)
-        for i, val in enumerate(state["do"]):
+        for i, val in enumerate(state.get_do()):
             client.publish(f"edgeforce/io/do/{i+1}", val, retain=True)
     else:
         print(f"❌ MQTT: Connection failed with code {rc}")
@@ -203,19 +205,17 @@ def on_mqtt_message(client, userdata, msg):
                     
                     if io_type == 'di' and 0 <= channel < 4:
                         # Update digital input state
-                        state['di'][channel] = value
+                        state.set_di(channel, value)
                         # Broadcast to WebSocket clients
                         socketio.emit('io_update', {
-                            'di': state['di'], 
-                            'do': state['do']
+                            'di': state.get_di(), 'do': state.get_do()
                         }, namespace='/')
                         
                     elif io_type == 'do' and 0 <= channel < 4:
                         # Update digital output state (read-back)
-                        state['do'][channel] = value
+                        state.set_do(channel, value)
                         socketio.emit('io_update', {
-                            'di': state['di'], 
-                            'do': state['do']
+                            'di': state.get_di(), 'do': state.get_do()
                         }, namespace='/')
                         
                 except ValueError:
@@ -227,8 +227,8 @@ def on_mqtt_message(client, userdata, msg):
                 if metric_name:
                     # Store system metrics in state (optional)
                     if 'mqtt_system' not in state:
-                        state['mqtt_system'] = {}
-                    state['mqtt_system'][metric_name] = payload
+                        mqtt_system.clear()
+                    mqtt_system[metric_name] = payload
                     
     except Exception as e:
         print(f"❌ MQTT message handler error: {e}")
@@ -407,22 +407,22 @@ def status():
 def get_io():
     """Get current I/O state"""
     return jsonify({
-        "di": state["di"],
-        "do": state["do"],
+        "di": state.get_di(),
+        "do": state.get_do(),
         "timestamp": time.time()
     })
 
 @app.post("/api/io/do/<int:ch>")
 def set_do(ch):
     """Set digital output state"""
-    if ch < 0 or ch >= len(state["do"]):
+    if ch < 0 or ch >= 4:
         return jsonify({"error": "Invalid channel"}), 400
     
     data = request.get_json()
     new_val = 1 if data.get("state") else 0
     
     # Update local state
-    state["do"][ch] = new_val
+    state.set_do(ch, new_val)
     
     # Write to hardware
     daemon.manager.write_output(ch, new_val)
@@ -435,8 +435,7 @@ def set_do(ch):
     
     # Broadcast change to WebSocket clients
     socketio.emit('io_update', {
-        'di': state["di"],
-        'do': state["do"]
+        'di': state.get_di(), 'do': state.get_do()
     }, namespace='/')
     
     return jsonify({
@@ -738,8 +737,7 @@ def handle_connect():
     print('✅ WebSocket: Client connected')
     # Send initial state
     emit('io_update', {
-        'di': state["di"],
-        'do': state["do"]
+        'di': state.get_di(), 'do': state.get_do()
     })
     
     # Get and send system metrics
@@ -759,8 +757,7 @@ def handle_request_io():
     """Client requests current I/O state"""
     print('📥 WebSocket: I/O state requested')
     emit('io_update', {
-        'di': state["di"],
-        'do': state["do"]
+        'di': state.get_di(), 'do': state.get_do()
     })
 
 @socketio.on('request_system')
@@ -785,12 +782,12 @@ def handle_set_do(data):
         emit('error', {'message': 'Missing channel or value'})
         return
     
-    if ch < 0 or ch >= len(state["do"]):
+    if ch < 0 or ch >= 4:
         emit('error', {'message': 'Invalid channel'})
         return
     
     # Update state
-    state["do"][ch] = value
+    state.set_do(ch, value)
     
     # Write to hardware
     daemon.manager.write_output(ch, value)
@@ -801,8 +798,7 @@ def handle_set_do(data):
     
     # Broadcast to all clients
     socketio.emit('io_update', {
-        'di': state["di"],
-        'do': state["do"]
+        'di': state.get_di(), 'do': state.get_do()
     }, namespace='/')
     
     print(f'✅ DO{ch} set to {value}')
@@ -823,7 +819,7 @@ def background_broadcast():
                 broadcast_count += 1
                 
                 # Always broadcast I/O state
-                current_io = {"di": state["di"][:], "do": state["do"][:]}
+                current_io = {"di": state.get_di(), "do": state.get_do()}
                 socketio.emit('io_update', current_io, namespace='/')
                 
                 if current_io != last_io_state:

@@ -137,9 +137,9 @@ class EFIODeviceDaemon:
             self.mqtt_breaker.reset()
             
             # Publish initial I/O state
-            for i, val in enumerate(state["di"]):
+            for i, val in enumerate(state.get_di()):
                 self._publish_di(i, val)
-            for i, val in enumerate(state["do"]):
+            for i, val in enumerate(state.get_do()):
                 self._publish_do(i, val)
             
             health_status.update("mqtt", "healthy", "Connected and publishing")
@@ -250,7 +250,7 @@ class EFIODeviceDaemon:
                         self._publish_di(i, val)
                 
                 # Update state
-                state["di"] = di_values
+                state.set_di_all(di_values)
                 
                 time.sleep(0.1)  # 100ms polling rate
                 

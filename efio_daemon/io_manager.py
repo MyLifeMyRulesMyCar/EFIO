@@ -43,14 +43,14 @@ class IOManager:
         self._stop_reinit = False
         
         # Try to initialize hardware
-        if not state["simulation"]:
+        if not state.get_simulation():
             try:
                 self._init_hardware()
                 print("✅ GPIO initialized")
             except Exception as e:
                 print(f"⚠️ GPIO init failed: {e}")
                 print("💾 Running in simulation mode")
-                state["simulation"] = True
+                state.set_simulation(True)
                 self._start_reinit_thread()
 
     # ================================
@@ -118,7 +118,7 @@ class IOManager:
         self._cleanup_hardware()
         self._setup_inputs()
         self._setup_outputs()
-        state["simulation"] = False
+        state.set_simulation(False)
 
     # ================================
     # Public API
@@ -131,35 +131,37 @@ class IOManager:
         Note: If hardware fails, switches to simulation mode
         and returns last known state.
         """
-        if state["simulation"]:
-            return state["di"]
+        if state.get_simulation():
+            return state.get_di()
         
         try:
             new_vals = []
-            
-            for name, (chip, line) in INPUT_PINS.items():
-                req = self.requests_in.get(chip)
-                if not req:
-                    raise RuntimeError(f"GPIO chip {chip} not available")
-                
-                val_raw = req.get_value(line)
-                val = 1 if val_raw == Value.ACTIVE else 0
-                new_vals.append(val)
-            
-            # Update state
-            state["di"] = new_vals
+
+            # Protect hardware access with local lock to avoid concurrent gpiod calls
+            with self._lock:
+                for name, (chip, line) in INPUT_PINS.items():
+                    req = self.requests_in.get(chip)
+                    if not req:
+                        raise RuntimeError(f"GPIO chip {chip} not available")
+                    
+                    val_raw = req.get_value(line)
+                    val = 1 if val_raw == Value.ACTIVE else 0
+                    new_vals.append(val)
+
+            # Update state atomically
+            state.set_di_all(new_vals)
             return new_vals
             
         except Exception as e:
             # Hardware failure - switch to simulation
             print(f"❌ GPIO read error: {e}")
             
-            if not state["simulation"]:
+            if not state.get_simulation():
                 print("⚠️ Switching to simulation mode")
-                state["simulation"] = True
+                state.set_simulation(True)
                 self._start_reinit_thread()
             
-            return state["di"]
+            return state.get_di()
 
     def write_output(self, ch, value):
         """
@@ -169,11 +171,11 @@ class IOManager:
             ch: Channel number (0-3)
             value: 1 (ON) or 0 (OFF)
         """
-        # Always update state first
-        state["do"][ch] = value
+        # Always update state first (thread-safe)
+        state.set_do(ch, value)
         
         # If in simulation, just log
-        if state["simulation"]:
+        if state.get_simulation():
             print(f"💾 Simulation: DO{ch} = {value}")
             return
         
@@ -185,16 +187,18 @@ class IOManager:
             req = self.requests_out.get(chip)
             if not req:
                 raise RuntimeError(f"GPIO chip {chip} not available")
-            
-            req.set_value(line, Value.ACTIVE if value else Value.INACTIVE)
+
+            # Protect hardware access with local lock
+            with self._lock:
+                req.set_value(line, Value.ACTIVE if value else Value.INACTIVE)
             print(f"✅ DO{ch} = {value}")
             
         except Exception as e:
             print(f"❌ GPIO write error: {e}")
             
-            if not state["simulation"]:
+            if not state.get_simulation():
                 print("⚠️ Switching to simulation mode")
-                state["simulation"] = True
+                state.set_simulation(True)
                 self._start_reinit_thread()
 
     # ================================
@@ -238,7 +242,7 @@ class IOManager:
                     
                     # Success!
                     print("✅ GPIO hardware reconnected!")
-                    state["simulation"] = False
+                    state.set_simulation(False)
                     break
                     
                 except Exception as e:
@@ -257,7 +261,7 @@ class IOManager:
     def get_status(self):
         """Get current status (for diagnostics)"""
         return {
-            "simulation_mode": state["simulation"],
+            "simulation_mode": state.get_simulation(),
             "reinit_thread_active": self._reinit_thread and self._reinit_thread.is_alive(),
             "input_chips": len(self.requests_in),
             "output_chips": len(self.requests_out)
