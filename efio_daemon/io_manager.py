@@ -20,7 +20,7 @@ OUTPUT_PINS = {
     'DO0': ('/dev/gpiochip1', 24),
     'DO1': ('/dev/gpiochip1', 27),
     'DO2': ('/dev/gpiochip1', 28),
-    'DO3': ('/dev/gpiochip1', 29),
+    'DO3': ('/dev/gpiochip4', 22),
 }
 
 
