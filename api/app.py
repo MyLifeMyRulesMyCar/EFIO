@@ -37,6 +37,8 @@ from api.modbus_mqtt_bridge_routes import modbus_mqtt_api, set_bridge_instance
 from efio_daemon.modbus_mqtt_bridge import ModbusMQTTBridge
 from api.mqtt_config import load_mqtt_config
 from api.health_routes import health_api
+from api.can_routes import can_api
+from efio_daemon.can_manager import can_manager
 
 # Local package imports that rely on project root in sys.path
 from efio_daemon.watchdog import WatchdogTimer
@@ -95,6 +97,7 @@ app.register_blueprint(backup_api)
 app.register_blueprint(mqtt_config_api)
 app.register_blueprint(modbus_mqtt_api)
 app.register_blueprint(health_api)
+app.register_blueprint(can_api)
 
 print("=" * 60)
 print("EFIO API Server Starting...")
@@ -334,6 +337,55 @@ def init_modbus_mqtt_bridge():
     except Exception as e:
         print(f"❌ Modbus-MQTT Bridge: Initialization failed: {e}")
         return False
+
+def init_can_manager():
+    """Initialize CAN manager and auto-connect if configured"""
+    try:
+        from api.can_routes import load_can_config
+        
+        config = load_can_config()
+        if not config:
+            print("⚠️ CAN: No configuration found, using defaults")
+            return False
+        
+        # Check if auto-connect is enabled
+        if config.get('auto_connect', False):
+            controller_config = config.get('controller', {})
+            
+            # Configure manager
+            can_manager.spi_bus = controller_config.get('spi_bus', 2)
+            can_manager.spi_device = controller_config.get('spi_device', 0)
+            can_manager.bitrate = controller_config.get('bitrate', 125000)
+            
+            # Load devices from config
+            for device_data in config.get('devices', []):
+                from efio_daemon.can_manager import CANDevice
+                
+                device = CANDevice(
+                    device_id=device_data['id'],
+                    name=device_data['name'],
+                    can_id=device_data['can_id'],
+                    extended=device_data.get('extended', False),
+                    enabled=device_data.get('enabled', True)
+                )
+                device.messages = device_data.get('messages', [])
+                can_manager.add_device(device)
+            
+            # Connect to bus
+            can_manager.connect()
+            print(f"✅ CAN: Auto-connected at {can_manager.bitrate} bps")
+            print(f"   Loaded {len(config.get('devices', []))} devices")
+            return True
+        else:
+            print("ℹ️ CAN: Auto-connect disabled in configuration")
+            return False
+        
+    except Exception as e:
+        print(f"❌ CAN: Initialization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 
 # Helper function to publish to MQTT
 def mqtt_publish(topic, payload, retain=False):
@@ -886,6 +938,13 @@ def background_broadcast():
             traceback.print_exc()
             time.sleep(2)
 
+def broadcast_can_message(message):
+    """Broadcast CAN message to WebSocket clients"""
+    try:
+        socketio.emit('can_message', message, namespace='/')
+    except Exception as e:
+        print(f"WebSocket broadcast error: {e}")
+
 def start_background_thread():
     """Start background thread after socketio is initialized"""
     background_thread = threading.Thread(target=background_broadcast, daemon=True)
@@ -1006,6 +1065,9 @@ if __name__ == '__main__':
     
     # Initialize Modbus-MQTT bridge
     init_modbus_mqtt_bridge()
+    # Initialize CAN manager
+    init_can_manager()
+    can_manager.subscribe(broadcast_can_message)
     
     # Start background threads
     start_background_thread()
@@ -1020,6 +1082,14 @@ if __name__ == '__main__':
         if modbus_bridge:
             modbus_bridge.stop()
     atexit.register(cleanup_bridge)
+
+    def cleanup_can():
+        if can_manager.connected:
+            can_manager.disconnect()
+    import atexit
+    atexit.register(cleanup_can)
+
+    
     
     # START WATCHDOG MONITORING
     start_watchdog_thread()
