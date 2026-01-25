@@ -22,6 +22,7 @@ import ModbusManager from './pages/ModbusManager';
 import BackupRestore from './pages/BackupRestore'; 
 import MQTTSettings from './pages/MQTTSettings';
 import ModbusMQTTBridge from './pages/ModbusMQTTBridge';
+import CANManager from './pages/CANManager';
 
 const drawerWidth = 240;
 
@@ -120,6 +121,7 @@ function MainLayout() {
             <Route path="/metrics" element={<Metrics />} />
             <Route path="/diagnostic" element={<Diagnostic />} />
             <Route path="/modbus" element={<ModbusManager />} />
+            <Route path="/can" element={<CANManager />} />
             <Route path="/modbus-mqtt-bridge" element={<ModbusMQTTBridge />} />
             
             <Route path="/backup" element={

@@ -32,6 +32,7 @@ import {
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { SettingsInputComponent } from '@mui/icons-material'; 
+import { DirectionsCar } from '@mui/icons-material';
 const drawerWidth = 240;
 
 // Add to menuItems array
@@ -43,11 +44,13 @@ const menuItems = [
   { text: 'divider' },
   { text: 'Modbus Manager', icon: <SettingsInputComponent />, path: '/modbus' },
   { text: 'Modbus-MQTT Bridge', icon: <Transform />, path: '/modbus-mqtt-bridge' },
+  { text: 'CAN Bus Manager', icon: <DirectionsCar />, path: '/can' },
   { text: 'Backup & Restore', icon: <Backup />, path: '/backup', adminOnly: true },
   { text: 'divider' },  // ADD THIS DIVIDER
   { text: 'Network Config', icon: <NetworkCheck />, path: '/config/network', adminOnly: true },
   { text: 'I/O Config', icon: <Tune />, path: '/config/io' },
   { text: 'MQTT Settings', icon: <Wifi />, path: '/config/mqtt', adminOnly: true },  // ← ADD THIS
+  
   { text: 'Settings', icon: <Settings />, path: '/settings' }
 ];
 

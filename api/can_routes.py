@@ -7,6 +7,7 @@ from flask_jwt_extended import jwt_required, get_jwt
 import json
 import os
 from datetime import datetime
+import time
 from efio_daemon.can_manager import can_manager, CANDevice
 
 can_api = Blueprint('can_api', __name__)
@@ -563,3 +564,255 @@ def set_can_filters():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================
+# Additional endpoints: detection, scanning, detailed status, filter validation
+# ============================================
+
+
+@can_api.route('/api/can/detect-bitrate', methods=['POST'])
+@jwt_required()
+def detect_bitrate():
+    """
+    Auto-detect CAN bus bitrate by trying each supported speed
+    Returns the first speed that receives valid messages
+    """
+    if not admin_required():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    if can_manager.connected:
+        return jsonify({"error": "Disconnect CAN bus before detection"}), 400
+    
+    try:
+        # Load configuration
+        config = load_can_config()
+        controller_config = config.get('controller', {})
+        
+        # Bitrates to try (most common first)
+        test_bitrates = [125000, 250000, 500000, 100000, 50000, 1000000, 20000, 10000]
+        
+        detected = None
+        max_messages = 0
+        
+        for bitrate in test_bitrates:
+            print(f"🔍 Testing {bitrate} bps...")
+
+            # Configure manager for this bitrate
+            can_manager.spi_bus = controller_config.get('spi_bus', 2)
+            can_manager.spi_device = controller_config.get('spi_device', 0)
+            can_manager.bitrate = bitrate
+
+            try:
+                # Record starting count (use 0 if not available)
+                start_count = can_manager.stats.get('rx_total', 0)
+
+                # Try to connect
+                can_manager.connect()
+
+                # Wait longer to collect more samples
+                time.sleep(3)
+
+                # Count messages received during this test (delta)
+                end_count = can_manager.stats.get('rx_total', 0)
+                message_count = max(0, end_count - start_count)
+
+                print(f"   {bitrate} bps: {message_count} new messages (start={start_count} end={end_count})")
+
+                # If we got messages, this might be the right speed
+                if message_count > max_messages:
+                    max_messages = message_count
+                    detected = bitrate
+
+                # Disconnect for next test
+                try:
+                    can_manager.disconnect()
+                except Exception:
+                    pass
+
+                # If we got a good number of messages, stop testing
+                if message_count >= 10:
+                    break
+
+            except Exception as e:
+                print(f"   {bitrate} bps: Failed ({e})")
+                try:
+                    can_manager.disconnect()
+                except Exception:
+                    pass
+                continue
+        
+        if detected and max_messages > 0:
+            log_can_event("bitrate_detected", f"Auto-detected {detected} bps ({max_messages} messages)")
+            return jsonify({
+                "detected": True,
+                "bitrate": detected,
+                "messages_received": max_messages
+            }), 200
+        else:
+            log_can_event("bitrate_detection_failed", "No CAN traffic detected")
+            return jsonify({
+                "detected": False,
+                "error": "No CAN traffic detected on any bitrate"
+            }), 200
+        
+    except Exception as e:
+        log_can_event("bitrate_detection_error", f"Detection failed: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@can_api.route('/api/can/scan-nodes', methods=['POST'])
+@jwt_required()
+def scan_nodes():
+    """
+    Scan for active CAN nodes on the network
+    Returns list of detected node IDs with message counts
+    """
+    if not can_manager.connected:
+        return jsonify({"error": "CAN bus not connected"}), 400
+    
+    try:
+        # Clear message log
+        can_manager.clear_logs()
+        
+        # Wait for messages
+        print("🔍 Scanning for active nodes...")
+        time.sleep(5)  # Collect messages for 5 seconds
+        
+        # Get recent messages
+        messages = can_manager.get_recent_messages(1000)
+        
+        # Count unique IDs
+        node_stats = {}
+        for msg in messages:
+            can_id = msg.get('can_id')
+            if can_id not in node_stats:
+                node_stats[can_id] = {
+                    'id': can_id,
+                    'messages': 0,
+                    'last_seen': msg.get('timestamp'),
+                    'directions': set()
+                }
+            node_stats[can_id]['messages'] += 1
+            node_stats[can_id]['directions'].add(msg.get('direction'))
+            node_stats[can_id]['last_seen'] = msg.get('timestamp')
+        
+        # Convert to list and sort by message count
+        nodes = []
+        for node_id, stats in node_stats.items():
+            nodes.append({
+                'id': stats['id'],
+                'messages': stats['messages'],
+                'last_seen': stats['last_seen'],
+                'rx': 'RX' in stats['directions'],
+                'tx': 'TX' in stats['directions']
+            })
+        
+        nodes.sort(key=lambda x: x['messages'], reverse=True)
+        
+        log_can_event("nodes_scanned", f"Found {len(nodes)} active nodes")
+        
+        return jsonify({
+            "nodes": nodes,
+            "total": len(nodes),
+            "scan_duration": 5
+        }), 200
+        
+    except Exception as e:
+        log_can_event("node_scan_error", f"Scan failed: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@can_api.route('/api/can/status/detailed', methods=['GET'])
+@jwt_required()
+def get_detailed_status():
+    """Get detailed CAN bus status including error states"""
+    try:
+        status = can_manager.get_status()
+        
+        # Add bus health indicators
+        health = "healthy"
+        warnings = []
+        
+        if status.get('errors', 0) > 100:
+            health = "degraded"
+            warnings.append(f"High error count: {status.get('errors')}")
+        
+        if status.get('overruns', 0) > 10:
+            health = "warning"
+            warnings.append(f"Buffer overruns: {status.get('overruns')}")
+        
+        # Calculate bus load percentage (estimate)
+        bus_load = 0
+        if status.get('connected') and status.get('uptime'):
+            total_messages = status.get('rx_total', 0) + status.get('tx_total', 0)
+            messages_per_second = total_messages / status.get('uptime')
+            
+            # Estimate: at 125 kbps, theoretical max ~8000 msgs/sec for short frames
+            theoretical_max = (status.get('bitrate', 125000) / 125) * 100  # Rough estimate
+            bus_load = min(100, (messages_per_second / theoretical_max) * 100)
+        
+        return jsonify({
+            "status": status,
+            "health": health,
+            "warnings": warnings,
+            "bus_load_percent": round(bus_load, 1),
+            "timestamp": datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@can_api.route('/api/can/filters/validate', methods=['POST'])
+@jwt_required()
+def validate_filters():
+    """
+    Validate filter configuration before applying
+    Returns analysis of what the filters will accept/reject
+    """
+    data = request.get_json()
+    filters = data.get('filters', [])
+    
+    try:
+        analysis = []
+        
+        for i, f in enumerate(filters):
+            filter_id = int(f.get('id', '0'), 16) if isinstance(f.get('id'), str) else f.get('id', 0)
+            mask = int(f.get('mask', '0x7FF'), 16) if isinstance(f.get('mask'), str) else f.get('mask', 0x7FF)
+            
+            # Calculate which IDs will pass
+            # For standard CAN (11-bit): mask with 0x7FF
+            # For extended CAN (29-bit): mask with 0x1FFFFFFF
+            
+            if mask == 0x7FF:
+                # Exact match filter
+                accepted = [filter_id]
+                description = f"Only accepts ID 0x{filter_id:03X}"
+            else:
+                # Range filter
+                # Calculate range based on mask
+                inverted_mask = ~mask & 0x7FF
+                range_size = inverted_mask + 1
+                range_start = filter_id & mask
+                range_end = range_start + range_size - 1
+                
+                description = f"Accepts IDs 0x{range_start:03X} to 0x{range_end:03X}"
+                accepted = list(range(range_start, min(range_end + 1, 0x800)))
+            
+            analysis.append({
+                "filter_index": i,
+                "id": f"0x{filter_id:03X}",
+                "mask": f"0x{mask:03X}",
+                "description": description,
+                "accepted_count": len(accepted),
+                "accepted_ids": [f"0x{id:03X}" for id in accepted[:10]]  # Show first 10
+            })
+        
+        return jsonify({
+            "filters": analysis,
+            "total_filters": len(filters)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
