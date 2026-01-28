@@ -55,10 +55,11 @@ class CANManager:
     - Circuit breaker for error handling
     """
     
-    def __init__(self, spi_bus=2, spi_device=0, bitrate=125000):
+    def __init__(self, spi_bus=2, spi_device=0, bitrate=125000, crystal=8000000):
         self.spi_bus = spi_bus
         self.spi_device = spi_device
         self.bitrate = bitrate
+        self.crystal = crystal  # Add crystal frequency support
         
         # Controller
         self.controller: Optional[MCP2515] = None
@@ -115,7 +116,8 @@ class CANManager:
                 self.controller = MCP2515(
                     spi_bus=self.spi_bus,
                     spi_device=self.spi_device,
-                    speed=1000000  # 1 MHz SPI speed
+                    speed=1000000,  # 1 MHz SPI speed
+                    crystal=self.crystal
                 )
                 
                 # Initialize with bitrate

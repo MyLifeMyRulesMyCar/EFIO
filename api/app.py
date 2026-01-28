@@ -356,7 +356,7 @@ def init_can_manager():
             can_manager.spi_bus = controller_config.get('spi_bus', 2)
             can_manager.spi_device = controller_config.get('spi_device', 0)
             can_manager.bitrate = controller_config.get('bitrate', 125000)
-            
+            can_manager.crystal = controller_config.get('crystal', 8000000)
             # Load devices from config
             for device_data in config.get('devices', []):
                 from efio_daemon.can_manager import CANDevice

@@ -574,10 +574,7 @@ def set_can_filters():
 @can_api.route('/api/can/detect-bitrate', methods=['POST'])
 @jwt_required()
 def detect_bitrate():
-    """
-    Auto-detect CAN bus bitrate by trying each supported speed
-    Returns the first speed that receives valid messages
-    """
+    """Improved auto-detect with noise filtering"""
     if not admin_required():
         return jsonify({"error": "Admin access required"}), 403
     
@@ -585,81 +582,99 @@ def detect_bitrate():
         return jsonify({"error": "Disconnect CAN bus before detection"}), 400
     
     try:
-        # Load configuration
         config = load_can_config()
         controller_config = config.get('controller', {})
         
-        # Bitrates to try (most common first)
-        test_bitrates = [125000, 250000, 500000, 100000, 50000, 1000000, 20000, 10000]
+        # Test bitrates from most common to least
+        test_bitrates = [125000, 250000, 500000, 100000, 50000]
         
         detected = None
-        max_messages = 0
+        best_quality = 0
+        results = []
         
         for bitrate in test_bitrates:
             print(f"🔍 Testing {bitrate} bps...")
-
-            # Configure manager for this bitrate
+            
             can_manager.spi_bus = controller_config.get('spi_bus', 2)
             can_manager.spi_device = controller_config.get('spi_device', 0)
             can_manager.bitrate = bitrate
-
+            
             try:
-                # Record starting count (use 0 if not available)
-                start_count = can_manager.stats.get('rx_total', 0)
-
-                # Try to connect
+                # Connect
                 can_manager.connect()
-
-                # Wait longer to collect more samples
-                time.sleep(3)
-
-                # Count messages received during this test (delta)
+                
+                # Clear old data
+                can_manager.clear_logs()
+                time.sleep(0.2)
+                
+                # Sample for 5 seconds (longer = more reliable)
+                start_count = can_manager.stats.get('rx_total', 0)
+                start_errors = can_manager.stats.get('errors', 0)
+                
+                sample_time = 5
+                time.sleep(sample_time)
+                
+                # Count valid messages
                 end_count = can_manager.stats.get('rx_total', 0)
-                message_count = max(0, end_count - start_count)
-
-                print(f"   {bitrate} bps: {message_count} new messages (start={start_count} end={end_count})")
-
-                # If we got messages, this might be the right speed
-                if message_count > max_messages:
-                    max_messages = message_count
+                end_errors = can_manager.stats.get('errors', 0)
+                
+                valid_msgs = max(0, end_count - start_count)
+                errors = max(0, end_errors - start_errors)
+                
+                # Quality score (higher = better)
+                # Penalize errors heavily
+                msg_rate = valid_msgs / sample_time
+                error_penalty = errors * 5
+                quality = (valid_msgs * msg_rate) - error_penalty
+                
+                results.append({
+                    'bitrate': bitrate,
+                    'messages': valid_msgs,
+                    'rate': msg_rate,
+                    'errors': errors,
+                    'quality': quality
+                })
+                
+                print(f"   {valid_msgs} msgs, {msg_rate:.1f}/s, "
+                      f"{errors} errors, quality={quality:.1f}")
+                
+                # Update best (require at least 10 messages)
+                if quality > best_quality and valid_msgs >= 10:
+                    best_quality = quality
                     detected = bitrate
-
-                # Disconnect for next test
-                try:
-                    can_manager.disconnect()
-                except Exception:
-                    pass
-
-                # If we got a good number of messages, stop testing
-                if message_count >= 10:
-                    break
-
+                
+                can_manager.disconnect()
+                time.sleep(0.5)
+                
             except Exception as e:
-                print(f"   {bitrate} bps: Failed ({e})")
+                print(f"   Failed: {e}")
                 try:
                     can_manager.disconnect()
-                except Exception:
+                except:
                     pass
-                continue
+                time.sleep(0.5)
         
-        if detected and max_messages > 0:
-            log_can_event("bitrate_detected", f"Auto-detected {detected} bps ({max_messages} messages)")
+        # Return results
+        if detected and best_quality > 5:
+            log_can_event("bitrate_detected", 
+                         f"Detected {detected} bps (quality={best_quality:.1f})")
             return jsonify({
                 "detected": True,
                 "bitrate": detected,
-                "messages_received": max_messages
+                "quality": best_quality,
+                "all_results": results
             }), 200
         else:
-            log_can_event("bitrate_detection_failed", "No CAN traffic detected")
+            log_can_event("bitrate_detection_failed", "No valid bitrate found")
             return jsonify({
                 "detected": False,
-                "error": "No CAN traffic detected on any bitrate"
+                "error": "No reliable CAN traffic detected",
+                "all_results": results
             }), 200
         
     except Exception as e:
-        log_can_event("bitrate_detection_error", f"Detection failed: {str(e)}")
+        log_can_event("bitrate_detection_error", f"Error: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
 
 @can_api.route('/api/can/scan-nodes', methods=['POST'])
 @jwt_required()
