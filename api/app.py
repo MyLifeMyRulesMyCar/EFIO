@@ -39,6 +39,8 @@ from api.mqtt_config import load_mqtt_config
 from api.health_routes import health_api
 from api.can_routes import can_api
 from efio_daemon.can_manager import can_manager
+from api.can_mqtt_routes import can_mqtt_api, set_bridge_instance as set_can_bridge_instance
+from efio_daemon.can_mqtt_bridge import CANMQTTBridge
 
 # Local package imports that rely on project root in sys.path
 from efio_daemon.watchdog import WatchdogTimer
@@ -98,6 +100,7 @@ app.register_blueprint(mqtt_config_api)
 app.register_blueprint(modbus_mqtt_api)
 app.register_blueprint(health_api)
 app.register_blueprint(can_api)
+app.register_blueprint(can_mqtt_api)
 
 print("=" * 60)
 print("EFIO API Server Starting...")
@@ -114,6 +117,7 @@ print("=" * 60)
 
 mqtt_client = None
 modbus_bridge = None
+can_mqtt_bridge = None
 
 _mqtt_callbacks = {
     'on_connect': None,
@@ -338,10 +342,53 @@ def init_modbus_mqtt_bridge():
         print(f"❌ Modbus-MQTT Bridge: Initialization failed: {e}")
         return False
 
+def init_can_mqtt_bridge():
+    """Initialize CAN-MQTT Bridge"""
+    global can_mqtt_bridge
+    
+    try:
+        # Load MQTT configuration
+        mqtt_config = load_mqtt_config()
+
+        if mqtt_config.get('enabled', True):
+            print(f"✅ CAN Bridge MQTT: Broker {mqtt_config['broker']}:{mqtt_config['port']}")
+        
+        # Create bridge instance with CAN manager
+        can_mqtt_bridge = CANMQTTBridge(can_manager, mqtt_config)
+        
+        # Set bridge instance in routes module
+        set_can_bridge_instance(can_mqtt_bridge)
+        
+        # Load saved configuration
+        from api.can_mqtt_routes import load_bridge_config
+        bridge_config = load_bridge_config()
+        
+        # Auto-start if enabled
+        if bridge_config.get('enabled', False):
+            mappings = bridge_config.get('mappings', [])
+            enabled_mappings = [m for m in mappings if m.get('enabled', True)]
+            
+            if enabled_mappings:
+                can_mqtt_bridge.load_mappings(enabled_mappings)
+                
+                # Start bridge (will work even if CAN not connected)
+                if can_mqtt_bridge.start():
+                    print(f"✅ CAN-MQTT Bridge: Auto-started with {len(enabled_mappings)} mappings")
+        
+        print("✅ CAN-MQTT Bridge: Initialized")
+        return True
+        
+    except Exception as e:
+        print(f"❌ CAN-MQTT Bridge: Initialization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def init_can_manager():
     """Initialize CAN manager and auto-connect if configured"""
     try:
         from api.can_routes import load_can_config
+        from efio_daemon.can_manager import CANDevice  # IMPORTANT: Import CANDevice
         
         config = load_can_config()
         if not config:
@@ -357,24 +404,38 @@ def init_can_manager():
             can_manager.spi_device = controller_config.get('spi_device', 0)
             can_manager.bitrate = controller_config.get('bitrate', 125000)
             can_manager.crystal = controller_config.get('crystal', 8000000)
-            # Load devices from config
+            
+            # Load devices from config - CORRECTED VERSION
+            devices_loaded = 0
             for device_data in config.get('devices', []):
-                from efio_daemon.can_manager import CANDevice
-                
-                device = CANDevice(
-                    device_id=device_data['id'],
-                    name=device_data['name'],
-                    can_id=device_data['can_id'],
-                    extended=device_data.get('extended', False),
-                    enabled=device_data.get('enabled', True)
-                )
-                device.messages = device_data.get('messages', [])
-                can_manager.add_device(device)
+                try:
+                    # Create CANDevice object
+                    device = CANDevice(
+                        device_id=device_data['id'],
+                        name=device_data['name'],
+                        can_id=device_data['can_id'],
+                        extended=device_data.get('extended', False),
+                        enabled=device_data.get('enabled', True)
+                    )
+                    
+                    # Set messages
+                    device.messages = device_data.get('messages', [])
+                    
+                    # Add to manager (pass the device object)
+                    can_manager.add_device(device)
+                    
+                    devices_loaded += 1
+                    print(f"   ✓ Loaded: {device_data['name']} (ID: 0x{device_data['can_id']:02X})")
+                        
+                except Exception as e:
+                    print(f"   ✗ Failed to load device {device_data.get('name', 'unknown')}: {e}")
+
+            print(f"   Total devices loaded: {devices_loaded}/{len(config.get('devices', []))}")
             
             # Connect to bus
             can_manager.connect()
             print(f"✅ CAN: Auto-connected at {can_manager.bitrate} bps")
-            print(f"   Loaded {len(config.get('devices', []))} devices")
+            print(f"   Devices in manager: {len(can_manager.devices)}")
             return True
         else:
             print("ℹ️ CAN: Auto-connect disabled in configuration")
@@ -385,6 +446,7 @@ def init_can_manager():
         import traceback
         traceback.print_exc()
         return False
+
 
 
 # Helper function to publish to MQTT
@@ -1063,11 +1125,14 @@ if __name__ == '__main__':
     else:
         print("⚠️ Running without MQTT (fallback mode)")
     
-    # Initialize Modbus-MQTT bridge
-    init_modbus_mqtt_bridge()
-    # Initialize CAN manager
     init_can_manager()
     can_manager.subscribe(broadcast_can_message)
+    # Initialize Modbus-MQTT bridge
+    init_modbus_mqtt_bridge()
+    init_can_mqtt_bridge()
+    # Initialize CAN manager
+    
+    
     
     # Start background threads
     start_background_thread()
@@ -1089,7 +1154,10 @@ if __name__ == '__main__':
     import atexit
     atexit.register(cleanup_can)
 
-    
+    def cleanup_can_bridge():
+        if can_mqtt_bridge:
+            can_mqtt_bridge.stop()
+    atexit.register(cleanup_can_bridge)
     
     # START WATCHDOG MONITORING
     start_watchdog_thread()
