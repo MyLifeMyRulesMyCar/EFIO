@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-# efio_daemon/can_mqtt_bridge.py
-# CAN Bus to MQTT Bridge - Simple ID-to-Topic Mapping
-# Phase 1: Direct CAN message forwarding (no byte parsing yet)
+# efio_daemon/can_mqtt_bridge.py - CORRECTED VERSION
+# CAN Bus to MQTT Bridge with proper statistics tracking for UI
 
 import time
 import threading
@@ -12,30 +11,19 @@ from typing import Dict, List, Optional
 
 class CANMQTTBridge:
     """
-    Background service that:
-    1. Subscribes to CAN messages from specific CAN IDs
-    2. Publishes entire messages to corresponding MQTT topics
-    3. Tracks message rates and statistics
-    
-    Phase 1: Simple ID-to-Topic mapping
-    Future: Add byte extraction, data parsing, scaling
+    CAN to MQTT Bridge with UI-compatible statistics
+    Maps CAN IDs to MQTT topics with proper per-mapping tracking
     """
     
     def __init__(self, can_manager, mqtt_config):
-        """
-        Args:
-            can_manager: CANManager instance with active CAN bus connection
-            mqtt_config: MQTT broker configuration dict
-        """
         self.can_manager = can_manager
         self.mqtt_config = mqtt_config
-        self.mappings = []  # List of {id, can_id, topic, name, enabled, format}
+        self.mappings = []
         self.running = False
-        self.thread = None
         self.mqtt_client = None
         self.mqtt_connected = False
         
-        # Statistics
+        # Global statistics (matches UI expectations)
         self.stats = {
             'messages_received': 0,
             'messages_published': 0,
@@ -44,65 +32,31 @@ class CANMQTTBridge:
             'start_time': None
         }
         
-        # Rate limiting per mapping
+        # Per-mapping tracking (for UI table display)
         self.last_publish = {}  # {mapping_id: timestamp}
         self.message_counts = {}  # {mapping_id: count}
+        self.last_values = {}  # {mapping_id: data_hex} for change detection
+        
+        self._lock = threading.RLock()
         
         print("✅ CAN-MQTT Bridge initialized")
     
-    # ================================
-    # Configuration Management
-    # ================================
-    
     def load_mappings(self, mappings: List[Dict]):
-        """
-        Load CAN ID to MQTT topic mappings
-        
-        Mapping structure:
-        {
-            "id": "map_001",
-            "name": "Engine ECU",
-            "can_id": 246,  # 0x0F6
-            "topic": "vehicle/engine/ecu",
-            "format": "json",  # "json" or "raw"
-            "enabled": True,
-            "rate_limit_ms": 100,  # Optional: minimum time between publishes
-            "qos": 1  # MQTT QoS (0, 1, or 2)
-        }
-        """
-        self.mappings = mappings
-        
-        # Initialize tracking
-        for mapping in mappings:
-            mapping_id = mapping['id']
-            self.last_publish[mapping_id] = 0
-            self.message_counts[mapping_id] = 0
-        
-        enabled_count = sum(1 for m in mappings if m.get('enabled', True))
-        print(f"✅ Bridge: Loaded {len(mappings)} mappings ({enabled_count} enabled)")
+        """Load CAN ID to MQTT topic mappings"""
+        with self._lock:
+            self.mappings = mappings
+            
+            # Initialize tracking for each mapping
+            for mapping in mappings:
+                mapping_id = mapping['id']
+                self.last_publish[mapping_id] = 0
+                self.message_counts[mapping_id] = 0
+                self.last_values[mapping_id] = None
+            
+            enabled_count = sum(1 for m in mappings if m.get('enabled', True))
+            print(f"✅ Bridge: Loaded {len(mappings)} mappings ({enabled_count} enabled)")
     
-    def add_mapping(self, mapping: Dict):
-        """Add a single mapping"""
-        self.mappings.append(mapping)
-        mapping_id = mapping['id']
-        self.last_publish[mapping_id] = 0
-        self.message_counts[mapping_id] = 0
-        print(f"✅ Bridge: Added mapping '{mapping['name']}'")
-    
-    def remove_mapping(self, mapping_id: str):
-        """Remove a mapping by ID"""
-        self.mappings = [m for m in self.mappings if m['id'] != mapping_id]
-        if mapping_id in self.last_publish:
-            del self.last_publish[mapping_id]
-        if mapping_id in self.message_counts:
-            del self.message_counts[mapping_id]
-        print(f"🗑️ Bridge: Removed mapping '{mapping_id}'")
-    
-    # ================================
-    # MQTT Connection Management
-    # ================================
-    
-    def _init_mqtt(self):
+    def _init_mqtt(self) -> bool:
         """Initialize MQTT client"""
         try:
             if not self.mqtt_config.get('enabled', True):
@@ -112,29 +66,32 @@ class CANMQTTBridge:
             client_id = f"{self.mqtt_config.get('client_id', 'efio')}-can-bridge"
             self.mqtt_client = mqtt.Client(client_id=client_id)
             
-            # Set callbacks
             self.mqtt_client.on_connect = self._on_mqtt_connect
             self.mqtt_client.on_disconnect = self._on_mqtt_disconnect
             
-            # Authentication
             username = self.mqtt_config.get('username', '')
             password = self.mqtt_config.get('password', '')
             if username and password:
                 self.mqtt_client.username_pw_set(username, password)
-                print(f"🔐 CAN Bridge MQTT: Using authentication")
             
-            # TLS
             if self.mqtt_config.get('use_tls', False):
                 self.mqtt_client.tls_set()
-                print("🔒 CAN Bridge MQTT: TLS/SSL enabled")
             
-            # Connect
             broker = self.mqtt_config.get('broker', 'localhost')
             port = self.mqtt_config.get('port', 1883)
             keepalive = self.mqtt_config.get('keepalive', 60)
             
             self.mqtt_client.connect(broker, port, keepalive)
             self.mqtt_client.loop_start()
+            
+            # Wait for connection
+            timeout = 10
+            start_time = time.time()
+            while not self.mqtt_connected and (time.time() - start_time) < timeout:
+                time.sleep(0.1)
+            
+            if not self.mqtt_connected:
+                raise TimeoutError(f"MQTT connection timeout after {timeout}s")
             
             print(f"✅ CAN Bridge MQTT: Connected to {broker}:{port}")
             return True
@@ -144,202 +101,139 @@ class CANMQTTBridge:
             return False
     
     def _on_mqtt_connect(self, client, userdata, flags, rc):
-        """MQTT connection callback"""
         if rc == 0:
             self.mqtt_connected = True
             print("✅ CAN Bridge MQTT: Connected successfully")
         else:
-            print(f"❌ CAN Bridge MQTT: Connection failed (code {rc})")
             self.mqtt_connected = False
     
     def _on_mqtt_disconnect(self, client, userdata, rc):
-        """MQTT disconnection callback"""
         self.mqtt_connected = False
         if rc != 0:
             print(f"⚠️ CAN Bridge MQTT: Disconnected unexpectedly (code {rc})")
     
-    # ================================
-    # CAN Message Processing
-    # ================================
-    
     def _on_can_message(self, message: Dict):
-        """
-        Callback for CAN messages (called by CANManager)
+        """Handle incoming CAN message"""
+        if not self.running or not self.mqtt_connected:
+            return
         
-        Message structure from CANManager:
-        {
-            'timestamp': '2025-01-28T12:34:56.789',
-            'direction': 'RX',
-            'can_id': 246,
-            'dlc': 8,
-            'data': [0x8E, 0x87, 0x32, 0xFA, 0x26, 0x8E, 0xBE, 0x86],
-            'extended': False
-        }
-        """
         try:
             self.stats['messages_received'] += 1
-            
-            # Find matching mappings for this CAN ID
             can_id = message['can_id']
             
-            for mapping in self.mappings:
-                if not mapping.get('enabled', True):
-                    continue
-                
-                if mapping['can_id'] == can_id:
-                    self._process_mapping(mapping, message)
+            with self._lock:
+                for mapping in self.mappings:
+                    if mapping['can_id'] == can_id and mapping.get('enabled', True):
+                        self._process_mapping(mapping, message)
         
         except Exception as e:
             self.stats['errors'] += 1
             print(f"❌ CAN Bridge: Error processing message: {e}")
     
     def _process_mapping(self, mapping: Dict, message: Dict):
-        """Process a CAN message for a specific mapping"""
+        """Process CAN message for a specific mapping"""
+        mapping_id = mapping['id']
+        
         try:
-            mapping_id = mapping['id']
+            # Convert data to hex string
+            data_hex = ' '.join([f'{b:02X}' for b in message['data'][:message['dlc']]])
             
-            # Rate limiting check
-            if not self._should_publish(mapping, mapping_id):
+            # Check if should publish (change detection + rate limiting)
+            if not self._should_publish(mapping, mapping_id, data_hex):
                 self.stats['messages_dropped'] += 1
                 return
             
-            # Format message based on configuration
+            # Format and publish
             payload = self._format_message(mapping, message)
             
-            # Publish to MQTT
             if self._publish_to_mqtt(mapping, payload):
+                # ✅ Update statistics (THIS IS KEY FOR UI)
                 self.stats['messages_published'] += 1
-                self.message_counts[mapping_id] += 1
+                self.message_counts[mapping_id] = self.message_counts.get(mapping_id, 0) + 1
                 self.last_publish[mapping_id] = time.time()
+                self.last_values[mapping_id] = data_hex
         
         except Exception as e:
             self.stats['errors'] += 1
             print(f"⚠️ CAN Bridge: Error processing mapping '{mapping['name']}': {e}")
     
-    def _should_publish(self, mapping: Dict, mapping_id: str) -> bool:
-        """Check if message should be published (rate limiting)"""
-        rate_limit = mapping.get('rate_limit_ms', 0)
+    def _should_publish(self, mapping: Dict, mapping_id: str, data_hex: str) -> bool:
+        """Check if message should be published"""
+        # Change detection
+        if mapping.get('publish_on_change', True):
+            if self.last_values.get(mapping_id) == data_hex:
+                return False
         
-        if rate_limit <= 0:
-            return True
+        # Rate limiting
+        min_interval = mapping.get('min_interval_ms', 0) / 1000.0
+        if min_interval > 0:
+            last_time = self.last_publish.get(mapping_id, 0)
+            if (time.time() - last_time) < min_interval:
+                return False
         
-        last_time = self.last_publish.get(mapping_id, 0)
-        elapsed_ms = (time.time() - last_time) * 1000
-        
-        return elapsed_ms >= rate_limit
+        return True
     
     def _format_message(self, mapping: Dict, message: Dict) -> str:
-        """
-        Format CAN message for MQTT publishing
-        
-        Format options:
-        - "json": Full JSON object with all fields
-        - "raw": Hex string of data bytes only
-        - "data_array": JSON array of data bytes
-        """
-        format_type = mapping.get('format', 'json')
-        
-        if format_type == 'json':
-            # Full structured JSON
-            payload = {
-                "can_id": f"0x{message['can_id']:03X}",
-                "can_id_decimal": message['can_id'],
-                "dlc": message['dlc'],
-                "data": [f"0x{b:02X}" for b in message['data']],
-                "data_decimal": message['data'],
-                "extended": message['extended'],
-                "timestamp": message['timestamp'],
-                "device_name": mapping.get('name', 'Unknown')
-            }
-            return json.dumps(payload)
-        
-        elif format_type == 'raw':
-            # Hex string: "8E8732FA268EBE86"
-            return ''.join([f"{b:02X}" for b in message['data'][:message['dlc']]])
-        
-        elif format_type == 'data_array':
-            # JSON array: [142, 135, 50, 250, 38, 142, 190, 134]
-            return json.dumps(message['data'][:message['dlc']])
-        
-        else:
-            # Default to JSON
-            return json.dumps(message)
+        """Format CAN message for MQTT"""
+        payload = {
+            "can_id": f"0x{message['can_id']:03X}",
+            "can_id_decimal": message['can_id'],
+            "dlc": message['dlc'],
+            "data_hex": [f"0x{b:02X}" for b in message['data'][:message['dlc']]],
+            "data_decimal": message['data'][:message['dlc']],
+            "extended": message.get('extended', False),
+            "timestamp": message['timestamp'],
+            "timestamp_unix": time.time(),
+            "device_name": mapping.get('name', 'Unknown')
+        }
+        return json.dumps(payload)
     
     def _publish_to_mqtt(self, mapping: Dict, payload: str) -> bool:
-        """Publish formatted message to MQTT topic"""
+        """Publish to MQTT topic"""
         if not self.mqtt_client or not self.mqtt_connected:
             return False
         
         try:
-            topic = mapping['topic']
             qos = mapping.get('qos', 1)
-            
-            self.mqtt_client.publish(topic, payload, qos=qos, retain=False)
+            self.mqtt_client.publish(mapping['topic'], payload, qos=qos, retain=False)
             return True
-            
         except Exception as e:
             print(f"❌ CAN Bridge: MQTT publish error: {e}")
             return False
     
-    # ================================
-    # Bridge Lifecycle
-    # ================================
-    
     def _is_can_connected(self):
-        """
-        Check if CAN manager has devices available
-        Checks both runtime devices and config file
-        """
-        # First, try to get runtime status
+        """Check if CAN manager has devices available"""
+        # Check runtime status
         if hasattr(self.can_manager, 'get_status'):
             try:
                 status = self.can_manager.get_status()
-                if isinstance(status, dict):
-                    # Check if actively connected
-                    if status.get('connected', False):
-                        return True
-                    
-                    # Check runtime devices
-                    devices_count = status.get('devices_count', 0)
-                    if devices_count > 0:
-                        print(f"ℹ️  CAN Bridge: {devices_count} device(s) in CAN manager")
-                        return True
-            except Exception as e:
-                print(f"⚠️ CAN Bridge: Error getting CAN status: {e}")
+                if isinstance(status, dict) and status.get('connected', False):
+                    return True
+                if status.get('devices_count', 0) > 0:
+                    return True
+            except:
+                pass
         
-        # Check if devices dict exists in manager
-        if hasattr(self.can_manager, 'devices'):
-            devices = self.can_manager.devices
-            if devices and len(devices) > 0:
-                print(f"ℹ️  CAN Bridge: {len(devices)} device(s) registered")
-                return True
+        # Check devices dict
+        if hasattr(self.can_manager, 'devices') and self.can_manager.devices:
+            return len(self.can_manager.devices) > 0
         
-        # Check config file for device configurations
+        # Check config file
         import os
-        import json
         config_file = "/home/radxa/efio/can_config.json"
         if os.path.exists(config_file):
             try:
                 with open(config_file, 'r') as f:
                     config = json.load(f)
                     devices = config.get('devices', [])
-                    enabled_devices = [d for d in devices if d.get('enabled', True)]
-                    if enabled_devices:
-                        print(f"ℹ️  CAN Bridge: {len(enabled_devices)} device(s) in config file")
-                        print(f"   Note: Devices configured but CAN manager not connected")
-                        print(f"   Bridge will subscribe to manager and wait for messages")
-                        return True  # Allow bridge to start with config file devices
-            except Exception as e:
-                print(f"⚠️ Error reading CAN config: {e}")
-        
-        # Check standard connection attributes
-        if hasattr(self.can_manager, 'connected'):
-            if self.can_manager.connected:
-                return True
+                    if any(d.get('enabled', True) for d in devices):
+                        return True
+            except:
+                pass
         
         return False
     
-    def start(self):
+    def start(self) -> bool:
         """Start the bridge service"""
         if self.running:
             print("⚠️ CAN Bridge: Already running")
@@ -349,27 +243,13 @@ class CANMQTTBridge:
             print("⚠️ CAN Bridge: No mappings configured")
             return False
         
-        # Check if CAN manager has devices (configured or connected)
+        # Check CAN availability (but don't block startup)
         can_available = self._is_can_connected()
-        
-        print(f"🔍 CAN Bridge: Checking CAN availability...")
-        
-        # Get detailed status for debugging
-        if hasattr(self.can_manager, 'get_status'):
-            try:
-                status = self.can_manager.get_status()
-                print(f"   Connected: {status.get('connected', False)}")
-                print(f"   Devices: {status.get('devices_count', 0)}")
-                print(f"   Bitrate: {status.get('bitrate', 'unknown')}")
-            except Exception as e:
-                print(f"   Could not get detailed status: {e}")
-        
         if not can_available:
             print("⚠️  CAN Bridge: No CAN devices detected")
             print("   Bridge will start, but may not receive messages until device is connected")
-            print("   Tip: Start your CAN device in CAN Manager for full functionality")
         
-        # Initialize MQTT
+        # Initialize MQTT (this IS required)
         if not self._init_mqtt():
             print("❌ CAN Bridge: Cannot start without MQTT connection")
             return False
@@ -382,8 +262,6 @@ class CANMQTTBridge:
         
         enabled_count = sum(1 for m in self.mappings if m.get('enabled', True))
         print(f"✅ CAN-MQTT Bridge: Started with {enabled_count} mappings")
-        print(f"   Subscribed to CAN messages")
-        print(f"   Publishing to MQTT broker")
         
         return True
     
@@ -395,161 +273,80 @@ class CANMQTTBridge:
         print("🛑 CAN Bridge: Stopping...")
         self.running = False
         
-        # Unsubscribe from CAN messages
         try:
             self.can_manager.unsubscribe(self._on_can_message)
-        except Exception as e:
-            print(f"⚠️ Error unsubscribing from CAN: {e}")
+        except:
+            pass
         
-        # Stop MQTT
         if self.mqtt_client:
-            self.mqtt_client.loop_stop()
-            self.mqtt_client.disconnect()
+            try:
+                self.mqtt_client.loop_stop()
+                self.mqtt_client.disconnect()
+            except:
+                pass
         
         print("✅ CAN Bridge: Stopped")
     
-    # ================================
-    # Status & Statistics
-    # ================================
-    
     def get_status(self) -> Dict:
-        """Get bridge status and statistics"""
-        uptime = None
-        if self.stats['start_time']:
-            uptime = (datetime.now() - self.stats['start_time']).total_seconds()
-        
-        # Get CAN connection status using helper method
-        can_connected = self._is_can_connected()
-        
-        # Per-mapping statistics
-        mapping_stats = []
-        for mapping in self.mappings:
-            if mapping.get('enabled', True):
-                mapping_id = mapping['id']
-                mapping_stats.append({
-                    'id': mapping_id,
-                    'name': mapping['name'],
-                    'can_id': f"0x{mapping['can_id']:03X}",
-                    'topic': mapping['topic'],
-                    'message_count': self.message_counts.get(mapping_id, 0),
-                    'last_publish': self.last_publish.get(mapping_id, 0)
-                })
-        
-        return {
-            "running": self.running,
-            "can_connected": can_connected,  # Use helper method instead of direct attribute
-            "mqtt_connected": self.mqtt_connected,
-            "mappings_count": len(self.mappings),
-            "enabled_mappings": sum(1 for m in self.mappings if m.get('enabled', True)),
-            "uptime_seconds": uptime,
-            "statistics": {
-                "messages_received": self.stats['messages_received'],
-                "messages_published": self.stats['messages_published'],
-                "messages_dropped": self.stats['messages_dropped'],
-                "errors": self.stats['errors'],
-                "publish_rate": self._calculate_rate() if uptime else 0
-            },
-            "mapping_details": mapping_stats
-        }
-    
-    def _calculate_rate(self) -> float:
-        """Calculate messages per second"""
-        if not self.stats['start_time']:
-            return 0.0
-        
-        uptime = (datetime.now() - self.stats['start_time']).total_seconds()
-        if uptime == 0:
-            return 0.0
-        
-        return round(self.stats['messages_published'] / uptime, 2)
+        """Get bridge status - UI COMPATIBLE FORMAT"""
+        with self._lock:
+            uptime = None
+            publish_rate = 0.0
+            
+            if self.stats['start_time']:
+                uptime = (datetime.now() - self.stats['start_time']).total_seconds()
+                if uptime > 0:
+                    publish_rate = round(self.stats['messages_published'] / uptime, 2)
+            
+            # Build per-mapping details for UI table
+            mapping_details = []
+            for mapping in self.mappings:
+                if mapping.get('enabled', True):
+                    mapping_id = mapping['id']
+                    last_pub = self.last_publish.get(mapping_id, 0)
+                    
+                    mapping_details.append({
+                        'id': mapping_id,
+                        'name': mapping['name'],
+                        'can_id': f"0x{mapping['can_id']:03X}",
+                        'topic': mapping['topic'],
+                        'messages_received': self.message_counts.get(mapping_id, 0),
+                        'messages_published': self.message_counts.get(mapping_id, 0),
+                        'message_count': self.message_counts.get(mapping_id, 0),
+                        'last_publish': last_pub,
+                        'last_seen': datetime.fromtimestamp(last_pub).isoformat() if last_pub > 0 else None
+                    })
+            
+            # Return UI-compatible format
+            return {
+                "running": self.running,
+                "can_connected": self._is_can_connected(),
+                "mqtt_connected": self.mqtt_connected,
+                "mappings_count": len(self.mappings),
+                "enabled_mappings": sum(1 for m in self.mappings if m.get('enabled', True)),
+                "uptime_seconds": uptime,
+                "statistics": {
+                    "messages_received": self.stats['messages_received'],
+                    "messages_published": self.stats['messages_published'],
+                    "messages_dropped": self.stats['messages_dropped'],
+                    "errors": self.stats['errors'],
+                    "publish_rate": publish_rate
+                },
+                "mapping_details": mapping_details
+            }
     
     def reset_statistics(self):
         """Reset statistics counters"""
-        self.stats = {
-            'messages_received': 0,
-            'messages_published': 0,
-            'messages_dropped': 0,
-            'errors': 0,
-            'start_time': datetime.now() if self.running else None
-        }
-        
-        for mapping_id in self.message_counts:
-            self.message_counts[mapping_id] = 0
-        
-        print("🔄 CAN Bridge: Statistics reset")
-
-
-# ================================
-# Testing
-# ================================
-if __name__ == "__main__":
-    print("=" * 60)
-    print("CAN-MQTT Bridge - Phase 1 Test")
-    print("=" * 60)
-    
-    # Mock CAN manager
-    class MockCANManager:
-        def __init__(self):
-            self.connected = True
-            self.subscribers = []
-        
-        def subscribe(self, callback):
-            self.subscribers.append(callback)
-        
-        def unsubscribe(self, callback):
-            if callback in self.subscribers:
-                self.subscribers.remove(callback)
-        
-        def simulate_message(self, can_id, data):
-            """Simulate receiving a CAN message"""
-            message = {
-                'timestamp': datetime.now().isoformat(),
-                'direction': 'RX',
-                'can_id': can_id,
-                'dlc': len(data),
-                'data': data,
-                'extended': False
+        with self._lock:
+            self.stats = {
+                'messages_received': 0,
+                'messages_published': 0,
+                'messages_dropped': 0,
+                'errors': 0,
+                'start_time': datetime.now() if self.running else None
             }
             
-            for subscriber in self.subscribers:
-                subscriber(message)
-    
-    # Test configuration
-    mqtt_config = {
-        'enabled': True,
-        'broker': 'localhost',
-        'port': 1883,
-        'client_id': 'efio-test'
-    }
-    
-    mappings = [
-        {
-            'id': 'map_001',
-            'name': 'Engine ECU',
-            'can_id': 0x0F6,
-            'topic': 'test/vehicle/engine',
-            'format': 'json',
-            'enabled': True,
-            'rate_limit_ms': 100
-        },
-        {
-            'id': 'map_002',
-            'name': 'Transmission',
-            'can_id': 0x123,
-            'topic': 'test/vehicle/transmission',
-            'format': 'raw',
-            'enabled': True
-        }
-    ]
-    
-    # Create bridge
-    can_mgr = MockCANManager()
-    bridge = CANMQTTBridge(can_mgr, mqtt_config)
-    bridge.load_mappings(mappings)
-    
-    print("\n📊 Status before start:")
-    print(json.dumps(bridge.get_status(), indent=2))
-    
-    # Note: Full test requires actual MQTT broker
-    print("\n✅ Bridge created successfully")
-    print("   To fully test: Connect to actual CAN bus and MQTT broker")
+            for mapping_id in self.message_counts:
+                self.message_counts[mapping_id] = 0
+            
+            print("🔄 CAN Bridge: Statistics reset")

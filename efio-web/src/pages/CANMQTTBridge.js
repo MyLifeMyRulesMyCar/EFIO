@@ -32,6 +32,7 @@ import {
   Divider,
   CircularProgress
 } from '@mui/material';
+import apiConfig from '../config/apiConfig';
 import {
   Add as AddIcon,
   Delete as DeleteIcon,
@@ -53,7 +54,8 @@ const CANMQTTBridge = () => {
     mqtt_connected: false,
     can_connected: false,
     mappings_count: 0,
-    statistics: {}
+    statistics: {},
+    mapping_details: [] // ✅ ADDED: Initialize mapping_details
   });
   const [openDialog, setOpenDialog] = useState(false);
   const [editMapping, setEditMapping] = useState(null);
@@ -82,12 +84,24 @@ const CANMQTTBridge = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // ✅ ADDED: Debug logging to see what status contains
+  useEffect(() => {
+    if (status) {
+      console.log('CAN-MQTT Bridge Status:', {
+        running: status.running,
+        statistics: status.statistics,
+        mapping_details: status.mapping_details,
+        mapping_details_count: status.mapping_details?.length || 0
+      });
+    }
+  }, [status]);
+
   // ================================
   // API Helpers
   // ================================
 
   const getAuthHeaders = () => {
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('access_token');
     return {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
@@ -96,7 +110,8 @@ const CANMQTTBridge = () => {
 
   const apiRequest = async (url, options = {}) => {
     try {
-      const response = await fetch(url, {
+      const fullUrl = url.startsWith('http') ? url : `${apiConfig.baseUrl}${url}`;
+      const response = await fetch(fullUrl, {
         ...options,
         headers: {
           ...getAuthHeaders(),
@@ -143,12 +158,14 @@ const CANMQTTBridge = () => {
   const loadStatus = async () => {
     try {
       const data = await apiRequest('/api/can-mqtt/status');
+      console.log('Status loaded:', data); // ✅ ADDED: Debug log
       setStatus(data);
     } catch (err) {
       console.error('Failed to load status:', err);
     }
   };
 
+  // ✅ MODIFIED: Enhanced error handling
   const startBridge = async () => {
     setLoading(true);
     setError(null);
@@ -157,7 +174,40 @@ const CANMQTTBridge = () => {
       setSuccess('Bridge started successfully');
       await loadStatus();
     } catch (err) {
-      setError(err.message || 'Failed to start bridge');
+      // Enhanced error messages
+      let errorMessage = err.message || 'Failed to start bridge';
+      
+      if (errorMessage.includes('MQTT')) {
+        setError(
+          <Box>
+            <Typography variant="body2" fontWeight="bold">
+              MQTT Configuration Issue
+            </Typography>
+            <Typography variant="caption" display="block">
+              {errorMessage}
+            </Typography>
+            <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+              Go to Settings → MQTT Settings and enable MQTT publishing
+            </Typography>
+          </Box>
+        );
+      } else if (errorMessage.includes('CAN')) {
+        setError(
+          <Box>
+            <Typography variant="body2" fontWeight="bold">
+              CAN Connection Issue
+            </Typography>
+            <Typography variant="caption" display="block">
+              {errorMessage}
+            </Typography>
+            <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+              Bridge may start but won't forward messages until CAN device is connected
+            </Typography>
+          </Box>
+        );
+      } else {
+        setError(errorMessage);
+      }
     } finally {
       setLoading(false);
     }
@@ -310,6 +360,51 @@ const CANMQTTBridge = () => {
     return connected ? <CheckCircleIcon /> : <ErrorIcon />;
   };
 
+  // ✅ ADDED: Helper function to get mapping statistics
+  const getMappingStats = (mappingId) => {
+    // First try to find in mapping_details array
+    const detail = status.mapping_details?.find(d => d.id === mappingId);
+    if (detail) {
+      return {
+        messages_received: detail.messages_received || detail.message_count || 0,
+        messages_published: detail.messages_published || detail.message_count || 0,
+        last_seen: detail.last_seen,
+        last_publish: detail.last_publish
+      };
+    }
+    
+    // Fallback to old statistics object (backwards compatibility)
+    const stats = status.statistics?.[mappingId] || {};
+    return {
+      messages_received: stats.messages_received || 0,
+      messages_published: stats.messages_published || 0,
+      last_seen: stats.last_seen,
+      last_publish: stats.last_publish
+    };
+  };
+
+  // ✅ ADDED: Helper to format last publish time
+  const formatLastPublish = (lastPublish) => {
+    if (!lastPublish) return null;
+    
+    // Check if it's a Unix timestamp (number) or ISO string
+    const timestamp = typeof lastPublish === 'number' 
+      ? lastPublish * 1000  // Convert seconds to milliseconds
+      : lastPublish;
+    
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffSec = Math.floor((now - date) / 1000);
+    
+    if (diffSec < 60) {
+      return `${diffSec}s ago`;
+    } else if (diffSec < 3600) {
+      return `${Math.floor(diffSec / 60)}m ago`;
+    } else {
+      return date.toLocaleTimeString();
+    }
+  };
+
   // ================================
   // Render
   // ================================
@@ -335,6 +430,15 @@ const CANMQTTBridge = () => {
       {success && (
         <Alert severity="success" onClose={() => setSuccess(null)} sx={{ mb: 2 }}>
           {success}
+        </Alert>
+      )}
+
+      {/* ✅ ADDED: Info alert when bridge running but no statistics */}
+      {status.running && mappings.length > 0 && (
+        !status.mapping_details || status.mapping_details.length === 0
+      ) && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Bridge is running but no messages received yet. Ensure CAN bus has active traffic and mapping CAN IDs match actual messages.
         </Alert>
       )}
 
@@ -400,6 +504,10 @@ const CANMQTTBridge = () => {
               <Typography variant="h6" sx={{ mt: 1 }}>
                 {mappings.filter(m => m.enabled).length} / {mappings.length}
               </Typography>
+              {/* ✅ ADDED: Show total published messages */}
+              <Typography variant="caption" color="text.secondary">
+                Published: {status.statistics?.messages_published || 0}
+              </Typography>
             </CardContent>
           </Card>
         </Grid>
@@ -440,7 +548,7 @@ const CANMQTTBridge = () => {
             </Alert>
           )}
 
-          {!status.mqtt_connected && (
+          {!status.mqtt_connected && status.running && (
             <Alert severity="warning" sx={{ flexGrow: 1 }}>
               MQTT not connected. Check MQTT settings.
             </Alert>
@@ -476,7 +584,9 @@ const CANMQTTBridge = () => {
                 </TableRow>
               ) : (
                 mappings.map((mapping) => {
-                  const stats = status.statistics?.[mapping.id] || {};
+                  // ✅ MODIFIED: Use new helper function instead of direct access
+                  const stats = getMappingStats(mapping.id);
+                  
                   return (
                     <TableRow key={mapping.id}>
                       <TableCell>
@@ -517,17 +627,23 @@ const CANMQTTBridge = () => {
                           </Typography>
                         </Box>
                       </TableCell>
+                      {/* ✅ MODIFIED: Statistics cell with better handling */}
                       <TableCell>
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                          <Typography variant="caption">
-                            Received: {stats.messages_received || 0}
-                          </Typography>
-                          <Typography variant="caption">
-                            Published: {stats.messages_published || 0}
-                          </Typography>
-                          {stats.last_seen && (
+                          {stats.messages_published > 0 ? (
+                            <>
+                              <Typography variant="caption">
+                                Messages: {stats.messages_published}
+                              </Typography>
+                              {stats.last_publish && (
+                                <Typography variant="caption" color="text.secondary">
+                                  Last: {formatLastPublish(stats.last_publish)}
+                                </Typography>
+                              )}
+                            </>
+                          ) : (
                             <Typography variant="caption" color="text.secondary">
-                              Last: {new Date(stats.last_seen).toLocaleTimeString()}
+                              No activity
                             </Typography>
                           )}
                         </Box>
