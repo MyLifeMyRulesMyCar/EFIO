@@ -6,11 +6,10 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt
 import json
 import os
-import time
 
 can_mqtt_api = Blueprint('can_mqtt_api', __name__)
 
-# Configuration file path
+# Configuration file
 CAN_MQTT_CONFIG_FILE = "/home/radxa/efio/can_mqtt_bridge.json"
 
 # Bridge instance (will be set by app.py)
@@ -128,6 +127,7 @@ def add_mapping():
     mappings = config.get('mappings', [])
     
     # Generate unique ID
+    import time
     mapping_id = f"map_{int(time.time())}_{data['can_id']}"
     
     # Create mapping object
@@ -290,8 +290,7 @@ def get_bridge_status():
             "mqtt_connected": False,
             "can_connected": False,
             "mappings_count": 0,
-            "enabled_mappings": 0,
-            "statistics": {}
+            "error": "Bridge not initialized"
         }), 200
     
     status = bridge_instance.get_status()

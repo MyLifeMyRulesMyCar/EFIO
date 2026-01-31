@@ -349,9 +349,6 @@ def init_can_mqtt_bridge():
     try:
         # Load MQTT configuration
         mqtt_config = load_mqtt_config()
-
-        if mqtt_config.get('enabled', True):
-            print(f"✅ CAN Bridge MQTT: Broker {mqtt_config['broker']}:{mqtt_config['port']}")
         
         # Create bridge instance with CAN manager
         can_mqtt_bridge = CANMQTTBridge(can_manager, mqtt_config)
@@ -370,18 +367,14 @@ def init_can_mqtt_bridge():
             
             if enabled_mappings:
                 can_mqtt_bridge.load_mappings(enabled_mappings)
-                
-                # Start bridge (will work even if CAN not connected)
-                if can_mqtt_bridge.start():
-                    print(f"✅ CAN-MQTT Bridge: Auto-started with {len(enabled_mappings)} mappings")
+                can_mqtt_bridge.start()
+                print(f"✅ CAN-MQTT Bridge: Auto-started with {len(enabled_mappings)} mappings")
         
         print("✅ CAN-MQTT Bridge: Initialized")
         return True
         
     except Exception as e:
         print(f"❌ CAN-MQTT Bridge: Initialization failed: {e}")
-        import traceback
-        traceback.print_exc()
         return False
 
 def init_can_manager():
