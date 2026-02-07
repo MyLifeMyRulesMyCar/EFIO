@@ -738,45 +738,7 @@ def scan_nodes():
         return jsonify({"error": str(e)}), 500
 
 
-@can_api.route('/api/can/status/detailed', methods=['GET'])
-@jwt_required()
-def get_detailed_status():
-    """Get detailed CAN bus status including error states"""
-    try:
-        status = can_manager.get_status()
-        
-        # Add bus health indicators
-        health = "healthy"
-        warnings = []
-        
-        if status.get('errors', 0) > 100:
-            health = "degraded"
-            warnings.append(f"High error count: {status.get('errors')}")
-        
-        if status.get('overruns', 0) > 10:
-            health = "warning"
-            warnings.append(f"Buffer overruns: {status.get('overruns')}")
-        
-        # Calculate bus load percentage (estimate)
-        bus_load = 0
-        if status.get('connected') and status.get('uptime'):
-            total_messages = status.get('rx_total', 0) + status.get('tx_total', 0)
-            messages_per_second = total_messages / status.get('uptime')
-            
-            # Estimate: at 125 kbps, theoretical max ~8000 msgs/sec for short frames
-            theoretical_max = (status.get('bitrate', 125000) / 125) * 100  # Rough estimate
-            bus_load = min(100, (messages_per_second / theoretical_max) * 100)
-        
-        return jsonify({
-            "status": status,
-            "health": health,
-            "warnings": warnings,
-            "bus_load_percent": round(bus_load, 1),
-            "timestamp": datetime.now().isoformat()
-        }), 200
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+
 
 
 @can_api.route('/api/can/filters/validate', methods=['POST'])
@@ -831,3 +793,470 @@ def validate_filters():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+
+# ============================================
+# NEW: Health & Disconnection Monitoring
+# ============================================
+
+@can_api.route('/api/can/health', methods=['GET'])
+@jwt_required()
+def get_can_health():
+    """
+    Get comprehensive CAN health status.
+    Shows hardware status, device liveness, and circuit breaker states.
+    """
+    try:
+        status = can_manager.get_status()
+        devices = can_manager.get_all_devices()
+        
+        # Analyze health
+        health = "healthy"
+        warnings = []
+        
+        # Check hardware connection
+        if not status.get('connected'):
+            health = "unhealthy"
+            warnings.append("CAN hardware not connected")
+        
+        # Check hardware errors
+        if status.get('hardware_failures', 0) > 5:
+            health = "degraded"
+            warnings.append(f"High hardware failure count: {status['hardware_failures']}")
+        
+        # Check device timeouts
+        if status.get('device_timeouts', 0) > 0:
+            health = "degraded"
+            warnings.append(f"Device timeouts detected: {status['device_timeouts']}")
+        
+        # Check alive devices
+        alive_count = status.get('alive_devices', 0)
+        total_count = status.get('devices_count', 0)
+        
+        if total_count > 0 and alive_count == 0:
+            health = "degraded"
+            warnings.append("No devices responding")
+        elif alive_count < total_count:
+            warnings.append(f"Some devices not responding ({alive_count}/{total_count} alive)")
+        
+        # Device-level health
+        device_health = []
+        for device in devices:
+            dev_health = {
+                'id': device['id'],
+                'name': device['name'],
+                'can_id': f"0x{device['can_id']:03X}",
+                'alive': device.get('alive', False),
+                'last_seen': device.get('last_seen'),
+                'rx_count': device.get('rx_count', 0),
+                'timeout_threshold': device.get('timeout_threshold', 30)
+            }
+            
+            # Calculate time since last RX
+            if device.get('last_rx_time'):
+                time_since_rx = time.time() - device['last_rx_time']
+                dev_health['seconds_since_rx'] = round(time_since_rx, 1)
+                
+                if time_since_rx > device.get('timeout_threshold', 30):
+                    dev_health['status'] = 'timeout'
+                else:
+                    dev_health['status'] = 'active'
+            else:
+                dev_health['status'] = 'never_seen'
+                dev_health['seconds_since_rx'] = None
+            
+            device_health.append(dev_health)
+        
+        return jsonify({
+            "health": health,
+            "warnings": warnings,
+            "timestamp": datetime.now().isoformat(),
+            "hardware": {
+                "connected": status.get('connected'),
+                "bitrate": status.get('bitrate'),
+                "errors": status.get('errors'),
+                "hardware_failures": status.get('hardware_failures'),
+                "circuit_breaker": status.get('hardware_circuit_breaker')
+            },
+            "devices": {
+                "total": total_count,
+                "alive": alive_count,
+                "details": device_health
+            },
+            "statistics": {
+                "rx_total": status.get('rx_total'),
+                "tx_total": status.get('tx_total'),
+                "device_timeouts": status.get('device_timeouts'),
+                "auto_cleanups": status.get('auto_cleanups'),
+                "uptime": status.get('uptime')
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@can_api.route('/api/can/devices/<device_id>/liveness', methods=['GET'])
+@jwt_required()
+def get_device_liveness(device_id):
+    """
+    Get detailed liveness information for a specific device.
+    Useful for monitoring and debugging.
+    """
+    try:
+        device = can_manager.get_device(device_id)
+        
+        if not device:
+            return jsonify({"error": "Device not found"}), 404
+        
+        # Calculate liveness metrics
+        is_alive = device.is_alive()
+        time_since_rx = None
+        status = "never_seen"
+        
+        if device.last_rx_time:
+            time_since_rx = time.time() - device.last_rx_time
+            
+            if is_alive:
+                status = "alive"
+            else:
+                status = "timeout"
+        
+        return jsonify({
+            "device_id": device_id,
+            "name": device.name,
+            "can_id": f"0x{device.can_id:03X}",
+            "alive": is_alive,
+            "status": status,
+            "last_seen": device.last_seen,
+            "seconds_since_rx": round(time_since_rx, 1) if time_since_rx else None,
+            "timeout_threshold": device.timeout_threshold,
+            "rx_count": device.rx_count,
+            "tx_count": device.tx_count,
+            "timestamp": datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@can_api.route('/api/can/devices/<device_id>/timeout', methods=['POST'])
+@jwt_required()
+def set_device_timeout(device_id):
+    """
+    Set timeout threshold for device disconnection detection.
+    
+    Body: {"timeout": 30}  // seconds
+    """
+    if not admin_required():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    data = request.get_json()
+    timeout = data.get('timeout')
+    
+    if timeout is None:
+        return jsonify({"error": "timeout required"}), 400
+    
+    try:
+        timeout = int(timeout)
+        
+        if timeout < 5 or timeout > 300:
+            return jsonify({"error": "timeout must be 5-300 seconds"}), 400
+        
+        device = can_manager.get_device(device_id)
+        
+        if not device:
+            return jsonify({"error": "Device not found"}), 404
+        
+        device.timeout_threshold = timeout
+        
+        # Update configuration file
+        config = load_can_config()
+        for dev in config.get('devices', []):
+            if dev['id'] == device_id:
+                dev['timeout_threshold'] = timeout
+                break
+        
+        save_can_config(config)
+        
+        log_can_event(
+            "timeout_updated",
+            f"Timeout threshold updated for {device.name}",
+            {"device_id": device_id, "timeout": timeout}
+        )
+        
+        return jsonify({
+            "message": "Timeout threshold updated",
+            "device_id": device_id,
+            "timeout": timeout
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================
+# NEW: Circuit Breaker Management
+# ============================================
+
+@can_api.route('/api/can/circuit-breaker', methods=['GET'])
+@jwt_required()
+def get_circuit_breaker_status():
+    """Get circuit breaker status for hardware and all devices"""
+    try:
+        status = can_manager.get_status()
+        
+        # Get hardware breaker
+        hw_breaker = status.get('hardware_circuit_breaker', {})
+        
+        # Get device breakers
+        device_breakers = {}
+        for device_id, breaker in can_manager.device_breakers.items():
+            device = can_manager.get_device(device_id)
+            device_breakers[device_id] = {
+                'device_name': device.name if device else 'Unknown',
+                'can_id': f"0x{device.can_id:03X}" if device else None,
+                'breaker': breaker.get_state()
+            }
+        
+        return jsonify({
+            "hardware": hw_breaker,
+            "devices": device_breakers
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@can_api.route('/api/can/circuit-breaker/reset', methods=['POST'])
+@jwt_required()
+def reset_circuit_breakers():
+    """Reset all circuit breakers (admin only)"""
+    if not admin_required():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        # Reset hardware breaker
+        can_manager.hw_breaker.reset()
+        
+        # Reset all device breakers
+        for breaker in can_manager.device_breakers.values():
+            breaker.reset()
+        
+        log_can_event("circuit_breakers_reset", "All circuit breakers manually reset")
+        
+        return jsonify({
+            "message": "All circuit breakers reset",
+            "hardware_breaker": can_manager.hw_breaker.get_state()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@can_api.route('/api/can/devices/<device_id>/circuit-breaker/reset', methods=['POST'])
+@jwt_required()
+def reset_device_circuit_breaker(device_id):
+    """Reset circuit breaker for specific device"""
+    if not admin_required():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        if device_id not in can_manager.device_breakers:
+            return jsonify({"error": "No circuit breaker found for device"}), 404
+        
+        breaker = can_manager.device_breakers[device_id]
+        breaker.reset()
+        
+        device = can_manager.get_device(device_id)
+        device_name = device.name if device else device_id
+        
+        log_can_event(
+            "circuit_breaker_reset",
+            f"Circuit breaker reset for {device_name}",
+            {"device_id": device_id}
+        )
+        
+        return jsonify({
+            "message": "Circuit breaker reset",
+            "device_id": device_id,
+            "breaker": breaker.get_state()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================
+# NEW: Testing & Simulation Endpoints
+# ============================================
+
+@can_api.route('/api/can/test/simulate-timeout', methods=['POST'])
+@jwt_required()
+def simulate_device_timeout():
+    """
+    TESTING ENDPOINT: Simulate device timeout by forcing last_rx_time to old value.
+    
+    Body: {"device_id": "can_123", "seconds_ago": 60}
+    """
+    if not admin_required():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    data = request.get_json()
+    device_id = data.get('device_id')
+    seconds_ago = data.get('seconds_ago', 60)
+    
+    try:
+        device = can_manager.get_device(device_id)
+        
+        if not device:
+            return jsonify({"error": "Device not found"}), 404
+        
+        # Force old timestamp
+        device.last_rx_time = time.time() - seconds_ago
+        device.last_seen = datetime.fromtimestamp(device.last_rx_time).isoformat()
+        
+        log_can_event(
+            "timeout_simulated",
+            f"Simulated timeout for {device.name}",
+            {"device_id": device_id, "seconds_ago": seconds_ago}
+        )
+        
+        return jsonify({
+            "message": "Timeout simulated",
+            "device_id": device_id,
+            "device_name": device.name,
+            "simulated_last_rx": device.last_seen,
+            "will_timeout_in": f"{device.timeout_threshold - seconds_ago}s"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@can_api.route('/api/can/test/simulate-hardware-failure', methods=['POST'])
+@jwt_required()
+def simulate_hardware_failure():
+    """
+    TESTING ENDPOINT: Trigger hardware failure detection.
+    WARNING: This will disconnect the CAN bus!
+    """
+    if not admin_required():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    try:
+        # Force hardware cleanup
+        can_manager._cleanup_on_hardware_failure("Test simulation")
+        
+        log_can_event(
+            "hardware_failure_simulated",
+            "Hardware failure simulated for testing"
+        )
+        
+        return jsonify({
+            "message": "Hardware failure simulated",
+            "warning": "CAN bus has been disconnected",
+            "reconnect_with": "POST /api/can/connect"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@can_api.route('/api/can/test/force-device-cleanup', methods=['POST'])
+@jwt_required()
+def force_device_cleanup():
+    """
+    TESTING ENDPOINT: Force device timeout handler to run.
+    
+    Body: {"device_id": "can_123"}
+    """
+    if not admin_required():
+        return jsonify({"error": "Admin access required"}), 403
+    
+    data = request.get_json()
+    device_id = data.get('device_id')
+    
+    try:
+        device = can_manager.get_device(device_id)
+        
+        if not device:
+            return jsonify({"error": "Device not found"}), 404
+        
+        # Force timeout handler
+        can_manager._handle_device_timeout(device)
+        
+        log_can_event(
+            "device_cleanup_forced",
+            f"Forced cleanup for {device.name}",
+            {"device_id": device_id}
+        )
+        
+        return jsonify({
+            "message": "Device cleanup forced",
+            "device_id": device_id,
+            "device_name": device.name
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================
+# Enhanced Status Endpoints
+# ============================================
+
+@can_api.route('/api/can/status/detailed', methods=['GET'])
+@jwt_required()
+def get_detailed_status():
+    """
+    Get detailed CAN bus status including:
+    - Hardware health
+    - Device liveness
+    - Circuit breaker states
+    - Error statistics
+    """
+    try:
+        status = can_manager.get_status()
+        devices = can_manager.get_all_devices()
+        
+        # Calculate additional metrics
+        total_errors = status.get('errors', 0)
+        total_messages = status.get('rx_total', 0) + status.get('tx_total', 0)
+        error_rate = (total_errors / total_messages * 100) if total_messages > 0 else 0
+        
+        # Categorize devices
+        alive_devices = [d for d in devices if d.get('alive', False)]
+        timeout_devices = [d for d in devices if not d.get('alive', False) and d.get('last_rx_time')]
+        never_seen_devices = [d for d in devices if not d.get('last_rx_time')]
+        
+        return jsonify({
+            "timestamp": datetime.now().isoformat(),
+            "hardware": {
+                "connected": status.get('connected'),
+                "bitrate": status.get('bitrate'),
+                "uptime": status.get('uptime'),
+                "circuit_breaker": status.get('hardware_circuit_breaker')
+            },
+            "statistics": {
+                "rx_total": status.get('rx_total'),
+                "tx_total": status.get('tx_total'),
+                "errors": total_errors,
+                "error_rate_percent": round(error_rate, 2),
+                "hardware_failures": status.get('hardware_failures'),
+                "device_timeouts": status.get('device_timeouts'),
+                "auto_cleanups": status.get('auto_cleanups'),
+                "overruns": status.get('overruns')
+            },
+            "devices": {
+                "total": len(devices),
+                "alive": len(alive_devices),
+                "timeout": len(timeout_devices),
+                "never_seen": len(never_seen_devices),
+                "alive_list": [d['id'] for d in alive_devices],
+                "timeout_list": [d['id'] for d in timeout_devices],
+                "never_seen_list": [d['id'] for d in never_seen_devices]
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
