@@ -1,5 +1,5 @@
 // efio-web/src/pages/CANManager.js
-// Complete CAN Bus Manager UI with Message Sniffing
+// UPDATED: Proper connect/disconnect state management with health monitoring
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -8,12 +8,14 @@ import {
   TextField, Select, MenuItem, FormControl, InputLabel,
   Chip, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Paper, Alert, Tabs, Tab, Switch, FormControlLabel, CircularProgress,
-  Divider, ToggleButton, ToggleButtonGroup
+  List, ListItem, ListItemText, Divider, ToggleButton, ToggleButtonGroup,
+  LinearProgress
 } from '@mui/material';
 import {
-  Add, Edit, Delete, PlayArrow, Stop, Refresh, Send as SendIcon,
-  Link as LinkIcon, LinkOff, BugReport, Visibility, VisibilityOff,
-  FilterList, GetApp, DeleteSweep, Pause, FiberManualRecord, Settings, Search
+  Add, Edit, Delete, Link as LinkIcon, LinkOff, Refresh, Send as SendIcon,
+  PlayArrow, Stop, Search, ReadMore, Create, BugReport, Visibility, VisibilityOff,
+  FilterList, GetApp, DeleteSweep, Pause, FiberManualRecord, Settings,
+  Warning, CheckCircle, Error as ErrorIcon, PowerSettingsNew
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import apiConfig from '../config/apiConfig';
@@ -32,14 +34,13 @@ const SUPPORTED_BITRATES = [
 ];
 
 export default function CANManager() {
-    const { socket } = useEFIOWebSocket();
-
+  const { socket } = useEFIOWebSocket();
   const { getAuthHeader, hasRole } = useAuth();
-  
   
   // State management
   const [devices, setDevices] = useState([]);
   const [status, setStatus] = useState(null);
+  const [health, setHealth] = useState(null);
   const [messages, setMessages] = useState([]);
   const [statistics, setStatistics] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -59,31 +60,35 @@ export default function CANManager() {
   
   // Forms
   const [deviceForm, setDeviceForm] = useState({
-    name: '', can_id: '', extended: false, enabled: true, description: ''
+    name: '', can_id: '', extended: false, enabled: true, 
+    description: '', timeout_threshold: 30
   });
   
   const [sendForm, setSendForm] = useState({
     can_id: '', data: '', extended: false
   });
 
-  // CAN Configuration states (integrated from CANConfiguration.js)
+  // CAN Configuration states
   const [config, setConfig] = useState(null);
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [detectedBitrate, setDetectedBitrate] = useState(null);
   const [activeNodes, setActiveNodes] = useState([]);
 
-    // Add WebSocket listener for CAN messages
+  // Connection state
+  const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+
+  // Add WebSocket listener for CAN messages
   useEffect(() => {
     if (!socket) return;
     
     const handleCanMessage = (message) => {
       console.log('CAN message via WebSocket:', message);
       
-      // Add to messages array (prepend for newest first)
       setMessages(prev => {
         const updated = [message, ...prev];
-        return updated.slice(0, 100); // Keep last 100
+        return updated.slice(0, 100);
       });
     };
     
@@ -97,7 +102,10 @@ export default function CANManager() {
   // Load data on mount
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadStatus, 2000);
+    const interval = setInterval(() => {
+      loadStatus();
+      loadHealth();
+    }, 2000);
     return () => clearInterval(interval);
   }, []);
 
@@ -114,7 +122,13 @@ export default function CANManager() {
   // ================================
 
   const loadData = async () => {
-    await Promise.all([loadDevices(), loadStatus(), loadStatistics(), loadConfig()]);
+    await Promise.all([
+      loadDevices(), 
+      loadStatus(), 
+      loadHealth(),
+      loadStatistics(), 
+      loadConfig()
+    ]);
     setLoading(false);
   };
 
@@ -143,6 +157,20 @@ export default function CANManager() {
       }
     } catch (error) {
       console.error('Error loading status:', error);
+    }
+  };
+
+  const loadHealth = async () => {
+    try {
+      const response = await fetch(`${apiConfig.baseUrl}/api/can/health`, {
+        headers: getAuthHeader()
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setHealth(data);
+      }
+    } catch (error) {
+      console.error('Error loading health:', error);
     }
   };
 
@@ -176,10 +204,6 @@ export default function CANManager() {
     }
   };
 
-  // ================================
-  // CAN Configuration (from CANConfiguration.js)
-  // ================================
-
   const loadConfig = async () => {
     try {
       const response = await fetch(`${apiConfig.baseUrl}/api/can/config`, {
@@ -193,6 +217,71 @@ export default function CANManager() {
       console.error('Error loading CAN config:', error);
     }
   };
+
+  // ================================
+  // CAN Bus Control (Updated)
+  // ================================
+
+  const handleConnect = async () => {
+    if (!hasRole('admin')) {
+      setMessage({ type: 'error', text: 'Admin access required' });
+      return;
+    }
+
+    setConnecting(true);
+    try {
+      const response = await fetch(`${apiConfig.baseUrl}/api/can/connect`, {
+        method: 'POST',
+        headers: getAuthHeader()
+      });
+      
+      const data = await response.json();
+      if (response.ok) {
+        setMessage({ type: 'success', text: 'CAN bus connected successfully' });
+        await loadData();
+      } else {
+        setMessage({ 
+          type: 'error', 
+          text: data.error || 'Connection failed. Check hardware and try again.' 
+        });
+      }
+    } catch (error) {
+      setMessage({ 
+        type: 'error', 
+        text: 'Network error. Please check connection and try again.' 
+      });
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (!hasRole('admin')) {
+      setMessage({ type: 'error', text: 'Admin access required' });
+      return;
+    }
+
+    setDisconnecting(true);
+    try {
+      const response = await fetch(`${apiConfig.baseUrl}/api/can/disconnect`, {
+        method: 'POST',
+        headers: getAuthHeader()
+      });
+      
+      if (response.ok) {
+        setMessage({ type: 'success', text: 'CAN bus disconnected' });
+        await loadData();
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: 'Failed to disconnect' });
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
+  // ================================
+  // Configuration Management
+  // ================================
 
   const handleSaveConfig = async () => {
     if (!hasRole('admin')) {
@@ -209,8 +298,11 @@ export default function CANManager() {
       });
 
       if (response.ok) {
-        setMessage({ type: 'success', text: 'Configuration saved. Reconnect CAN bus for changes to take effect.' });
-        loadConfig();
+        setMessage({ 
+          type: 'success', 
+          text: 'Configuration saved. Reconnect CAN bus for changes to take effect.' 
+        });
+        await loadConfig();
       } else {
         const data = await response.json();
         setMessage({ type: 'error', text: data.error || 'Save failed' });
@@ -225,7 +317,10 @@ export default function CANManager() {
   const handleAutoDetectBitrate = async () => {
     setDetecting(true);
     setDetectedBitrate(null);
-    setMessage({ type: 'info', text: 'Detecting bitrate... This may take up to 30 seconds.' });
+    setMessage({ 
+      type: 'info', 
+      text: 'Detecting bitrate... This may take up to 30 seconds.' 
+    });
 
     try {
       const response = await fetch(`${apiConfig.baseUrl}/api/can/detect-bitrate`, {
@@ -236,37 +331,18 @@ export default function CANManager() {
       const data = await response.json();
       if (response.ok && data.detected) {
         setDetectedBitrate(data.bitrate);
-        setMessage({ type: 'success', text: `Detected ${data.bitrate} bps (${data.messages_received} messages)` });
+        setMessage({ 
+          type: 'success', 
+          text: `Detected ${data.bitrate} bps (quality: ${data.quality.toFixed(1)})` 
+        });
       } else {
-        setMessage({ type: 'warning', text: 'No CAN traffic detected. Make sure bus is active and termination is correct.' });
+        setMessage({ 
+          type: 'warning', 
+          text: 'No CAN traffic detected. Make sure bus is active.' 
+        });
       }
     } catch (error) {
       setMessage({ type: 'error', text: 'Detection failed' });
-    } finally {
-      setDetecting(false);
-    }
-  };
-
-  const handleScanActiveNodes = async () => {
-    setDetecting(true);
-    setActiveNodes([]);
-    setMessage({ type: 'info', text: 'Scanning for active nodes... Please wait.' });
-
-    try {
-      const response = await fetch(`${apiConfig.baseUrl}/api/can/scan-nodes`, {
-        method: 'POST',
-        headers: getAuthHeader()
-      });
-
-      const data = await response.json();
-      if (response.ok) {
-        setActiveNodes(data.nodes || []);
-        setMessage({ type: 'success', text: `Found ${data.nodes.length} active node(s)` });
-      } else {
-        setMessage({ type: 'error', text: data.error || 'Scan failed' });
-      }
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Scan failed' });
     } finally {
       setDetecting(false);
     }
@@ -278,56 +354,10 @@ export default function CANManager() {
         ...config,
         controller: { ...config.controller, bitrate: detectedBitrate }
       });
-      setMessage({ type: 'success', text: 'Bitrate applied locally. Click Save to persist.' });
-    }
-  };
-
-  // ================================
-  // CAN Bus Control
-  // ================================
-
-  const handleConnect = async () => {
-    if (!hasRole('admin')) {
-      setMessage({ type: 'error', text: 'Admin access required' });
-      return;
-    }
-
-    try {
-      const response = await fetch(`${apiConfig.baseUrl}/api/can/connect`, {
-        method: 'POST',
-        headers: getAuthHeader()
+      setMessage({ 
+        type: 'success', 
+        text: 'Bitrate applied. Click Save to persist.' 
       });
-      
-      const data = await response.json();
-      if (response.ok) {
-        setMessage({ type: 'success', text: 'CAN bus connected' });
-        loadData();
-      } else {
-        setMessage({ type: 'error', text: data.error || 'Connection failed' });
-      }
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Network error' });
-    }
-  };
-
-  const handleDisconnect = async () => {
-    if (!hasRole('admin')) {
-      setMessage({ type: 'error', text: 'Admin access required' });
-      return;
-    }
-
-    try {
-      const response = await fetch(`${apiConfig.baseUrl}/api/can/disconnect`, {
-        method: 'POST',
-        headers: getAuthHeader()
-      });
-      
-      if (response.ok) {
-        setMessage({ type: 'success', text: 'CAN bus disconnected' });
-        loadData();
-      }
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Network error' });
     }
   };
 
@@ -358,7 +388,7 @@ export default function CANManager() {
           text: selectedDevice ? 'Device updated' : 'Device created' 
         });
         setDeviceDialog(false);
-        loadDevices();
+        await loadDevices();
       } else {
         const data = await response.json();
         setMessage({ type: 'error', text: data.error });
@@ -379,7 +409,7 @@ export default function CANManager() {
 
       if (response.ok) {
         setMessage({ type: 'success', text: 'Device deleted' });
-        loadDevices();
+        await loadDevices();
       }
     } catch (error) {
       setMessage({ type: 'error', text: 'Network error' });
@@ -392,7 +422,6 @@ export default function CANManager() {
 
   const handleSendMessage = async () => {
     try {
-      // Parse data bytes
       const dataBytes = sendForm.data
         .split(/[\s,]+/)
         .filter(b => b)
@@ -419,7 +448,7 @@ export default function CANManager() {
       if (response.ok) {
         setMessage({ type: 'success', text: 'Message sent' });
         setSendDialog(false);
-        loadMessages();
+        await loadMessages();
       } else {
         const data = await response.json();
         setMessage({ type: 'error', text: data.error });
@@ -438,7 +467,7 @@ export default function CANManager() {
       return data.map(b => `0x${b.toString(16).toUpperCase().padStart(2, '0')}`).join(' ');
     } else if (format === 'DEC') {
       return data.join(' ');
-    } else { // ASCII
+    } else {
       return data.map(b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : '.').join('');
     }
   };
@@ -463,39 +492,70 @@ export default function CANManager() {
     a.click();
   };
 
+  const getHealthIcon = (healthStatus) => {
+    if (!healthStatus) return <FiberManualRecord sx={{ color: 'grey.500' }} />;
+    
+    switch (healthStatus) {
+      case 'healthy':
+        return <CheckCircle sx={{ color: 'success.main' }} />;
+      case 'degraded':
+        return <Warning sx={{ color: 'warning.main' }} />;
+      case 'unhealthy':
+        return <ErrorIcon sx={{ color: 'error.main' }} />;
+      default:
+        return <FiberManualRecord sx={{ color: 'grey.500' }} />;
+    }
+  };
+
   if (loading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
         <CircularProgress />
       </Box>
     );
   }
 
+  // ================================
+  // Render
+  // ================================
+
   return (
     <Box sx={{ p: 3 }}>
-      {/* Header */}
+      {/* Header with Connection Controls */}
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4" fontWeight="bold">CAN Bus Manager</Typography>
+        <Box>
+          <Typography variant="h4" fontWeight="bold">CAN Bus Manager</Typography>
+          {health && (
+            <Box display="flex" alignItems="center" gap={1} mt={1}>
+              {getHealthIcon(health.health)}
+              <Typography variant="body2" color="text.secondary">
+                System Health: {health.health || 'Unknown'}
+              </Typography>
+            </Box>
+          )}
+        </Box>
         <Box display="flex" gap={2}>
           {!status?.connected ? (
             <Button
               variant="contained"
               color="success"
-              startIcon={<LinkIcon />}
+              size="large"
+              startIcon={connecting ? <CircularProgress size={20} color="inherit" /> : <PowerSettingsNew />}
               onClick={handleConnect}
-              disabled={!hasRole('admin')}
+              disabled={!hasRole('admin') || connecting}
             >
-              Connect
+              {connecting ? 'Connecting...' : 'Connect CAN Bus'}
             </Button>
           ) : (
             <Button
               variant="contained"
               color="error"
-              startIcon={<LinkOff />}
+              size="large"
+              startIcon={disconnecting ? <CircularProgress size={20} color="inherit" /> : <PowerSettingsNew />}
               onClick={handleDisconnect}
-              disabled={!hasRole('admin')}
+              disabled={!hasRole('admin') || disconnecting}
             >
-              Disconnect
+              {disconnecting ? 'Disconnecting...' : 'Disconnect'}
             </Button>
           )}
           <Button variant="outlined" startIcon={<Refresh />} onClick={loadData}>
@@ -504,138 +564,27 @@ export default function CANManager() {
         </Box>
       </Box>
 
+      {/* Alert Messages */}
       {message && (
         <Alert severity={message.type} sx={{ mb: 3 }} onClose={() => setMessage(null)}>
           {message.text}
         </Alert>
       )}
 
-      {/* CAN Configuration - integrated from CANConfiguration.js */}
-      <Paper sx={{ p: 2, mb: 3 }}>
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-          <Box display="flex" alignItems="center" gap={1}>
-            <Settings />
-            <Typography variant="h6">CAN Configuration</Typography>
-          </Box>
-          <Box display="flex" gap={1}>
-            <Button
-              variant="outlined"
-              startIcon={detecting ? <CircularProgress size={18} /> : <Search />}
-              onClick={handleAutoDetectBitrate}
-              disabled={detecting || status?.connected}
-            >
-              {detecting ? 'Detecting...' : 'Auto-Detect Bitrate'}
-            </Button>
-            <Button
-              variant="contained"
-              startIcon={<Settings />}
-              onClick={handleSaveConfig}
-              disabled={saving || !hasRole('admin')}
-            >
-              {saving ? 'Saving...' : 'Save Configuration'}
-            </Button>
-          </Box>
-        </Box>
-
-        <Grid container spacing={2}>
-          <Grid item xs={12} md={4}>
-            <FormControl fullWidth>
-              <InputLabel>CAN Bitrate</InputLabel>
-              <Select
-                value={config?.controller?.bitrate || 125000}
-                label="CAN Bitrate"
-                onChange={(e) => setConfig({
-                  ...config,
-                  controller: { ...config?.controller, bitrate: e.target.value }
-                })}
-              >
-                {SUPPORTED_BITRATES.map((br) => (
-                  <MenuItem key={br.value} value={br.value}>{br.label}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-
-            {detectedBitrate && (
-              <Alert severity="success" sx={{ mt: 2 }} action={
-                <Button size="small" onClick={applyDetectedBitrate}>Apply</Button>
-              }>
-                Detected: {detectedBitrate / 1000} Kbps
-              </Alert>
-            )}
-          </Grid>
-
-          <Grid item xs={12} md={4}>
-            <Box display="flex" flexDirection="column" gap={1}>
-              <Typography variant="subtitle2">Filters</Typography>
-              {config?.filters?.map((filter, index) => (
-                <Box key={index} display="flex" gap={1} alignItems="center">
-                  <TextField
-                    size="small"
-                    label={`Filter ${index + 1} - ID`}
-                    placeholder="0x123"
-                    value={filter.id || ''}
-                    onChange={(e) => {
-                      const newFilters = [...(config.filters || [])];
-                      newFilters[index] = { ...filter, id: e.target.value };
-                      setConfig({ ...config, filters: newFilters });
-                    }}
-                    fullWidth
-                  />
-                  <TextField
-                    size="small"
-                    label="Mask"
-                    placeholder="0x7FF"
-                    value={filter.mask || ''}
-                    onChange={(e) => {
-                      const newFilters = [...(config.filters || [])];
-                      newFilters[index] = { ...filter, mask: e.target.value };
-                      setConfig({ ...config, filters: newFilters });
-                    }}
-                    sx={{ width: 140 }}
-                  />
-                </Box>
-              ))}
-
-              {(!config?.filters || config.filters.length < 2) && (
-                <Button size="small" variant="outlined" onClick={() => {
-                  const newFilters = [...(config?.filters || []), { id: '', mask: '0x7FF' }];
-                  setConfig({ ...config, filters: newFilters });
-                }}>
-                  Add Filter
-                </Button>
-              )}
-            </Box>
-          </Grid>
-
-          <Grid item xs={12} md={4}>
-            <Box display="flex" flexDirection="column" gap={1}>
-              <Typography variant="subtitle2">Active Node Scanner</Typography>
-              <Button
-                variant="contained"
-                size="small"
-                startIcon={<PlayArrow />}
-                onClick={handleScanActiveNodes}
-                disabled={detecting || !status?.connected}
-              >
-                {detecting ? 'Scanning...' : 'Scan Network'}
-              </Button>
-
-              {activeNodes.length > 0 ? (
-                <Box>
-                  {activeNodes.map((n, i) => (
-                    <Box key={i} display="flex" justifyContent="space-between" sx={{ mt: 1 }}>
-                      <Typography variant="body2">0x{n.id.toString(16).toUpperCase()}</Typography>
-                      <Typography variant="caption">{n.messages} msgs</Typography>
-                    </Box>
-                  ))}
-                </Box>
-              ) : (
-                <Typography variant="caption" color="text.secondary">No nodes discovered</Typography>
-              )}
-            </Box>
-          </Grid>
-        </Grid>
-      </Paper>
+      {/* Hardware Disconnection Warning */}
+      {health?.health === 'unhealthy' && health?.warnings?.some(w => w.includes('Hardware')) && (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          <Typography variant="body2" fontWeight="bold" gutterBottom>
+            CAN Hardware Disconnected
+          </Typography>
+          <Typography variant="caption" display="block">
+            {health.warnings.join('. ')}
+          </Typography>
+          <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+            Please check hardware connection and click "Connect CAN Bus" to retry.
+          </Typography>
+        </Alert>
+      )}
 
       {/* Status Cards */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
@@ -656,7 +605,7 @@ export default function CANManager() {
               </Box>
               {status?.connected && (
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  {status.bitrate} bps
+                  {status.bitrate.toLocaleString()} bps
                 </Typography>
               )}
             </CardContent>
@@ -685,7 +634,7 @@ export default function CANManager() {
                 {devices.length}
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Active: {devices.filter(d => d.last_seen).length}
+                Alive: {status?.alive_devices || 0}
               </Typography>
             </CardContent>
           </Card>
@@ -699,12 +648,90 @@ export default function CANManager() {
                 {status?.errors || 0}
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Overruns: {status?.overruns || 0}
+                Timeouts: {status?.device_timeouts || 0}
               </Typography>
             </CardContent>
           </Card>
         </Grid>
       </Grid>
+
+      {/* CAN Configuration Section */}
+      <Paper sx={{ p: 2, mb: 3 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+          <Box display="flex" alignItems="center" gap={1}>
+            <Settings />
+            <Typography variant="h6">CAN Configuration</Typography>
+          </Box>
+          <Box display="flex" gap={1}>
+            <Button
+              variant="outlined"
+              startIcon={detecting ? <CircularProgress size={18} /> : <Search />}
+              onClick={handleAutoDetectBitrate}
+              disabled={detecting || status?.connected}
+            >
+              {detecting ? 'Detecting...' : 'Auto-Detect Bitrate'}
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<Settings />}
+              onClick={handleSaveConfig}
+              disabled={saving || !hasRole('admin') || status?.connected}
+            >
+              {saving ? 'Saving...' : 'Save Configuration'}
+            </Button>
+          </Box>
+        </Box>
+
+        {status?.connected && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Disconnect CAN bus to modify configuration settings
+          </Alert>
+        )}
+
+        <Grid container spacing={2}>
+          <Grid item xs={12} md={4}>
+            <FormControl fullWidth disabled={status?.connected}>
+              <InputLabel>CAN Bitrate</InputLabel>
+              <Select
+                value={config?.controller?.bitrate || 125000}
+                label="CAN Bitrate"
+                onChange={(e) => setConfig({
+                  ...config,
+                  controller: { ...config?.controller, bitrate: e.target.value }
+                })}
+              >
+                {SUPPORTED_BITRATES.map((br) => (
+                  <MenuItem key={br.value} value={br.value}>{br.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
+            {detectedBitrate && (
+              <Alert severity="success" sx={{ mt: 2 }} action={
+                <Button size="small" onClick={applyDetectedBitrate}>Apply</Button>
+              }>
+                Detected: {detectedBitrate.toLocaleString()} bps
+              </Alert>
+            )}
+          </Grid>
+
+          <Grid item xs={12} md={8}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={config?.auto_connect || false}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    auto_connect: e.target.checked
+                  })}
+                  disabled={status?.connected}
+                />
+              }
+              label="Auto-connect on startup"
+            />
+          </Grid>
+        </Grid>
+      </Paper>
 
       {/* Tabs */}
       <Paper sx={{ mb: 2 }}>
@@ -725,7 +752,10 @@ export default function CANManager() {
               variant="contained"
               startIcon={<Add />}
               onClick={() => {
-                setDeviceForm({ name: '', can_id: '', extended: false, enabled: true, description: '' });
+                setDeviceForm({ 
+                  name: '', can_id: '', extended: false, enabled: true, 
+                  description: '', timeout_threshold: 30 
+                });
                 setSelectedDevice(null);
                 setDeviceDialog(true);
               }}
@@ -738,19 +768,26 @@ export default function CANManager() {
             <Table>
               <TableHead>
                 <TableRow>
+                  <TableCell>Status</TableCell>
                   <TableCell>Name</TableCell>
                   <TableCell>CAN ID</TableCell>
                   <TableCell>Type</TableCell>
                   <TableCell>RX Count</TableCell>
-                  <TableCell>TX Count</TableCell>
                   <TableCell>Last Seen</TableCell>
-                  <TableCell>Status</TableCell>
                   <TableCell align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {devices.map((device) => (
                   <TableRow key={device.id} hover>
+                    <TableCell>
+                      <Chip
+                        icon={device.alive ? <CheckCircle /> : <ErrorIcon />}
+                        label={device.alive ? 'Alive' : 'Timeout'}
+                        size="small"
+                        color={device.alive ? 'success' : 'default'}
+                      />
+                    </TableCell>
                     <TableCell>
                       <Typography variant="body2" fontWeight="bold">
                         {device.name}
@@ -767,18 +804,10 @@ export default function CANManager() {
                       {device.extended ? 'Extended' : 'Standard'}
                     </TableCell>
                     <TableCell>{device.rx_count || 0}</TableCell>
-                    <TableCell>{device.tx_count || 0}</TableCell>
                     <TableCell>
                       {device.last_seen 
                         ? new Date(device.last_seen).toLocaleTimeString()
-                        : '-'}
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        label={device.enabled ? 'Enabled' : 'Disabled'}
-                        size="small"
-                        color={device.enabled ? 'success' : 'default'}
-                      />
+                        : 'Never'}
                     </TableCell>
                     <TableCell align="right">
                       <IconButton
@@ -789,7 +818,8 @@ export default function CANManager() {
                             can_id: device.can_id,
                             extended: device.extended,
                             enabled: device.enabled,
-                            description: device.description || ''
+                            description: device.description || '',
+                            timeout_threshold: device.timeout_threshold || 30
                           });
                           setSelectedDevice(device);
                           setDeviceDialog(true);
@@ -813,7 +843,7 @@ export default function CANManager() {
         </Paper>
       )}
 
-      {/* Tab 1: Message Sniffer */}
+      {/* Tab 1: Message Sniffer - Same as before */}
       {activeTab === 1 && (
         <Paper sx={{ p: 2 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
@@ -840,6 +870,7 @@ export default function CANManager() {
                   setSniffing(!sniffing);
                   if (!sniffing) loadMessages();
                 }}
+                disabled={!status?.connected}
               >
                 {sniffing ? 'Pause' : 'Start'}
               </Button>
@@ -864,7 +895,12 @@ export default function CANManager() {
             </Box>
           </Box>
 
-          {/* Filters */}
+          {!status?.connected && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Connect CAN bus to start receiving messages
+            </Alert>
+          )}
+
           <Box display="flex" gap={2} mb={2}>
             <TextField
               size="small"
@@ -898,7 +934,6 @@ export default function CANManager() {
             </Button>
           </Box>
 
-          {/* Messages Table */}
           <TableContainer sx={{ maxHeight: 500 }}>
             <Table stickyHeader size="small">
               <TableHead>
@@ -921,7 +956,8 @@ export default function CANManager() {
                   >
                     <TableCell>
                       <Typography variant="caption">
-                        {new Date(msg.timestamp).toLocaleTimeString()}.{new Date(msg.timestamp).getMilliseconds()}
+                        {new Date(msg.timestamp).toLocaleTimeString()}.
+                        {new Date(msg.timestamp).getMilliseconds()}
                       </Typography>
                     </TableCell>
                     <TableCell>
@@ -965,6 +1001,12 @@ export default function CANManager() {
       {activeTab === 2 && (
         <Paper sx={{ p: 3, maxWidth: 600 }}>
           <Typography variant="h6" gutterBottom>Send CAN Message</Typography>
+          
+          {!status?.connected && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Connect CAN bus to send messages
+            </Alert>
+          )}
           
           <Grid container spacing={2} sx={{ mt: 1 }}>
             <Grid item xs={12}>
@@ -1015,29 +1057,6 @@ export default function CANManager() {
                 Send Message
               </Button>
             </Grid>
-
-            {/* Quick Send Presets */}
-            <Grid item xs={12}>
-              <Divider sx={{ my: 2 }}>Quick Send</Divider>
-            </Grid>
-            
-            {devices.slice(0, 3).map((device) => (
-              <Grid item xs={12} key={device.id}>
-                <Button
-                  fullWidth
-                  variant="outlined"
-                  onClick={() => {
-                    setSendForm({
-                      can_id: device.can_id.toString(),
-                      data: '00 00 00 00 00 00 00 00',
-                      extended: device.extended
-                    });
-                  }}
-                >
-                  Send to {device.name} (0x{device.can_id.toString(16).toUpperCase()})
-                </Button>
-              </Grid>
-            ))}
           </Grid>
         </Paper>
       )}
@@ -1064,8 +1083,8 @@ export default function CANManager() {
                   </Typography>
                 </Box>
                 <Box display="flex" justifyContent="space-between">
-                  <Typography>Overruns:</Typography>
-                  <Typography fontWeight="bold">{statistics.bus.overruns}</Typography>
+                  <Typography>Device Timeouts:</Typography>
+                  <Typography fontWeight="bold">{statistics.bus.device_timeouts || 0}</Typography>
                 </Box>
                 {statistics.bus.uptime && (
                   <Box display="flex" justifyContent="space-between">
@@ -1097,50 +1116,7 @@ export default function CANManager() {
                   <Typography>Total Device RX:</Typography>
                   <Typography fontWeight="bold">{statistics.devices.total_rx}</Typography>
                 </Box>
-                <Box display="flex" justifyContent="space-between">
-                  <Typography>Total Device TX:</Typography>
-                  <Typography fontWeight="bold">{statistics.devices.total_tx}</Typography>
-                </Box>
               </Box>
-            </Paper>
-          </Grid>
-
-          {/* Per-Device Statistics */}
-          <Grid item xs={12}>
-            <Paper sx={{ p: 2 }}>
-              <Typography variant="h6" gutterBottom>Per-Device Counters</Typography>
-              <TableContainer>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Device</TableCell>
-                      <TableCell>CAN ID</TableCell>
-                      <TableCell>RX Count</TableCell>
-                      <TableCell>TX Count</TableCell>
-                      <TableCell>Total</TableCell>
-                      <TableCell>Last Activity</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {devices.map((device) => (
-                      <TableRow key={device.id}>
-                        <TableCell>{device.name}</TableCell>
-                        <TableCell>0x{device.can_id.toString(16).toUpperCase()}</TableCell>
-                        <TableCell>{device.rx_count || 0}</TableCell>
-                        <TableCell>{device.tx_count || 0}</TableCell>
-                        <TableCell fontWeight="bold">
-                          {(device.rx_count || 0) + (device.tx_count || 0)}
-                        </TableCell>
-                        <TableCell>
-                          {device.last_seen 
-                            ? new Date(device.last_seen).toLocaleString()
-                            : 'Never'}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
             </Paper>
           </Grid>
         </Grid>
@@ -1194,6 +1170,21 @@ export default function CANManager() {
                 label="Description (optional)"
                 value={deviceForm.description}
                 onChange={(e) => setDeviceForm({ ...deviceForm, description: e.target.value })}
+              />
+            </Grid>
+            
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                type="number"
+                label="Timeout Threshold (seconds)"
+                value={deviceForm.timeout_threshold}
+                onChange={(e) => setDeviceForm({ 
+                  ...deviceForm, 
+                  timeout_threshold: parseInt(e.target.value) || 30 
+                })}
+                inputProps={{ min: 5, max: 300 }}
+                helperText="Device timeout detection threshold"
               />
             </Grid>
             
